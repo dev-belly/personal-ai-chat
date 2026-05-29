@@ -1,0 +1,6 @@
+node_modules/
+.next/
+.env
+.env.local
+dev-server.log
+start-dev.bat
