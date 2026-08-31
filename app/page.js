@@ -6,6 +6,7 @@ import "./globals.css";
 export default function Home() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
@@ -13,6 +14,10 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    setAccessToken(sessionStorage.getItem("chat-access-token") || "");
+  }, []);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -24,7 +29,8 @@ export default function Home() {
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || loading) return;
+    const token = accessToken.trim();
+    if (!text || !token || loading) return;
 
     const userMsg = { role: "user", content: text };
     const newMessages = [...messages, userMsg];
@@ -35,12 +41,14 @@ export default function Home() {
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          messages: newMessages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
+          messages: newMessages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content })),
         }),
       });
 
@@ -50,6 +58,9 @@ export default function Home() {
       }
 
       const data = await res.json();
+      if (typeof data.content !== "string") {
+        throw new Error("服务返回了无效响应");
+      }
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.content },
@@ -75,15 +86,36 @@ export default function Home() {
     setMessages([]);
   }
 
+  function updateAccessToken(value) {
+    setAccessToken(value);
+    if (value) {
+      sessionStorage.setItem("chat-access-token", value);
+    } else {
+      sessionStorage.removeItem("chat-access-token");
+    }
+  }
+
   return (
     <div className="app">
       <header className="header">
         <h1>Claude Chat</h1>
-        {messages.length > 0 && (
-          <button className="clear-btn" onClick={clearChat}>
-            New Chat
-          </button>
-        )}
+        <div className="header-actions">
+          <input
+            className="access-token"
+            type="password"
+            value={accessToken}
+            onChange={(event) => updateAccessToken(event.target.value)}
+            placeholder="Access token"
+            aria-label="Chat access token"
+            autoComplete="off"
+            maxLength={256}
+          />
+          {messages.length > 0 && (
+            <button className="clear-btn" onClick={clearChat}>
+              New Chat
+            </button>
+          )}
+        </div>
       </header>
 
       <main className="chat-container">
@@ -91,6 +123,9 @@ export default function Home() {
           <div className="empty-state">
             <div className="logo">&#10022;</div>
             <p>Start chatting with Claude</p>
+            {!accessToken.trim() && (
+              <p className="access-hint">Enter your private access token first.</p>
+            )}
           </div>
         ) : (
           <div className="messages">
@@ -139,7 +174,8 @@ export default function Home() {
           <button
             className="send-btn"
             onClick={sendMessage}
-            disabled={loading || !input.trim()}
+            disabled={loading || !input.trim() || !accessToken.trim()}
+            aria-label="Send message"
           >
             <svg
               width="20"

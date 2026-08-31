@@ -1,29 +1,47 @@
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  authorizeRequest,
+  isValidAccessTokenConfiguration,
+  readJsonBody,
+  RequestBodyError,
+  validateMessages,
+} from "../../../lib/chat-validation.mjs";
 
 export const maxDuration = 60;
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com",
-});
-
 export async function POST(request) {
-  try {
-    const { messages } = await request.json();
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = process.env.CLAUDE_MODEL;
+  const accessToken = process.env.CHAT_ACCESS_TOKEN;
 
-    if (!messages || !Array.isArray(messages)) {
-      return Response.json({ error: "消息格式错误" }, { status: 400 });
+  if (!apiKey || !model || !isValidAccessTokenConfiguration(accessToken)) {
+    return Response.json(
+      { error: "服务尚未完成安全配置" },
+      { status: 503 }
+    );
+  }
+
+  if (!authorizeRequest(request.headers.get("authorization"), accessToken)) {
+    return Response.json({ error: "访问口令无效" }, { status: 401 });
+  }
+
+  try {
+    const payload = await readJsonBody(request);
+    const validation = validateMessages(payload?.messages);
+
+    if (!validation.ok) {
+      return Response.json({ error: validation.error }, { status: 400 });
     }
 
-    const model = process.env.CLAUDE_MODEL || "mimo-v2-pro";
+    const client = new Anthropic({
+      apiKey,
+      baseURL: process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com",
+    });
 
     const response = await client.messages.create({
       model,
       max_tokens: 4096,
-      messages: messages.map((m) => ({
-        role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
-      })),
+      messages: validation.messages,
     });
 
     const content =
@@ -34,12 +52,19 @@ export async function POST(request) {
 
     return Response.json({ content });
   } catch (error) {
-    console.error("API error:", error);
-
-    if (error.status === 401) {
-      return Response.json({ error: "API Key 无效" }, { status: 500 });
+    if (error instanceof RequestBodyError) {
+      return Response.json({ error: error.message }, { status: error.status });
     }
-    if (error.status === 429) {
+
+    console.error("Chat upstream request failed", {
+      name: error?.name,
+      status: error?.status,
+    });
+
+    if (error?.status === 401) {
+      return Response.json({ error: "上游服务认证失败" }, { status: 502 });
+    }
+    if (error?.status === 429) {
       return Response.json(
         { error: "请求过于频繁，请稍后再试" },
         { status: 429 }
@@ -47,8 +72,8 @@ export async function POST(request) {
     }
 
     return Response.json(
-      { error: error.message || "服务暂时不可用" },
-      { status: 500 }
+      { error: "上游服务暂时不可用" },
+      { status: 502 }
     );
   }
 }

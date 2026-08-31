@@ -1,7 +1,10 @@
 node_modules/
 .next/
 .open-next/
-.env
-.env.local
-dev-server.log
+.wrangler/
+.env*
+!.env.example
+.dev.vars*
+!.dev.vars.example
+*.log
 start-dev.bat

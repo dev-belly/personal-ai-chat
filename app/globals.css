@@ -23,6 +23,7 @@ body {
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -30,6 +31,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   max-width: 800px;
   margin: 0 auto;
 }
@@ -47,6 +49,33 @@ body {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.5px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.access-token {
+  width: 150px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.access-token:focus {
+  border-color: var(--accent);
+}
+
+.access-token::placeholder {
+  color: var(--text-dim);
 }
 
 .clear-btn {
@@ -89,6 +118,11 @@ body {
 .empty-state p {
   color: var(--text-dim);
   font-size: 16px;
+}
+
+.empty-state .access-hint {
+  font-size: 13px;
+  color: var(--accent);
 }
 
 .messages {
@@ -134,6 +168,7 @@ body {
   line-height: 1.7;
   font-size: 15px;
   border: 1px solid var(--border);
+  overflow-wrap: anywhere;
 }
 
 .message.user .message-text {
@@ -246,6 +281,35 @@ textarea:disabled {
   color: var(--bg);
 }
 
+@media (max-width: 480px) {
+  .header {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .access-token {
+    flex: 1;
+    width: auto;
+  }
+
+  .chat-container {
+    padding: 14px;
+  }
+
+  .input-area {
+    padding: 12px 14px;
+  }
+
+  .input-wrapper {
+    padding: 9px 10px;
+  }
+}
+
 .send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
   transform: scale(1.05);
@@ -276,6 +340,14 @@ textarea:disabled {
 @media (max-width: 640px) {
   .header {
     padding: 12px 16px;
+  }
+
+  .header-actions {
+    max-width: 65%;
+  }
+
+  .access-token {
+    width: 120px;
   }
 
   .chat-container {

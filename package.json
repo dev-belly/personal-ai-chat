@@ -5,19 +5,32 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:worker": "opennextjs-cloudflare",
-    "dev:worker": "wrangler dev",
-    "preview": "npm run build:worker && npm run dev:worker",
-    "deploy": "npm run build:worker && wrangler deploy",
+    "build:worker": "opennextjs-cloudflare build",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "test": "node --test",
+    "check": "npm test && npm run build && npm run build:worker",
     "start": "next start"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "next": "^15.3.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@anthropic-ai/sdk": "0.39.0",
+    "next": "15.5.24",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.19.11"
+    "@opennextjs/cloudflare": "1.20.4",
+    "rclone.js": "0.6.6",
+    "wrangler": "4.127.1"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "overrides": {
+    "form-data": "4.0.6",
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26",
+    "sharp": "0.35.4"
   }
 }
