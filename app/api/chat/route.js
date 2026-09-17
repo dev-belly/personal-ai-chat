@@ -8,6 +8,14 @@ import {
 } from "../../../lib/chat-validation.mjs";
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  return Response.json({
+    configured: Boolean(process.env.ANTHROPIC_API_KEY && process.env.CLAUDE_MODEL
+      && isValidAccessTokenConfiguration(process.env.CHAT_ACCESS_TOKEN)),
+  }, { headers: { "Cache-Control": "no-store" } });
+}
 
 export async function POST(request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -42,6 +50,10 @@ export async function POST(request) {
       model,
       max_tokens: 4096,
       messages: validation.messages,
+    }, {
+      signal: request.signal,
+      timeout: 50_000,
+      maxRetries: 0,
     });
 
     const content =

@@ -55,7 +55,29 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+.header select {
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.mode-notice {
+  padding: 12px 20px;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1.6;
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-notice button { margin-left: 8px; }
+.input-hint { color: var(--text-dim); font-size: 12px; margin-top: 8px; }
+.retry-btn { align-self: flex-start; }
+.clear-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .access-token {
   width: 150px;
@@ -343,7 +365,7 @@ textarea:disabled {
   }
 
   .header-actions {
-    max-width: 65%;
+    max-width: 100%;
   }
 
   .access-token {
