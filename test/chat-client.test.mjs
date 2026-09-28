@@ -25,6 +25,16 @@ test('long sessions retain complete recent turns within server limits', () => {
   assert.ok(next.length < 40);
 });
 
+test('a long assistant reply remains usable on the following turn', () => {
+  const previous = [
+    { role: 'user', content: 'Explain the plan', status: 'sent' },
+    { role: 'assistant', content: 'reply '.repeat(2_000) },
+  ];
+  const next = buildConversation(previous, 'Continue');
+  assert.equal(validateMessages(next).ok, true);
+  assert.equal(next[1].content.length, 12_000);
+});
+
 test('oversized input rejects immediately', () => {
   assert.throws(() => buildConversation([], 'x'.repeat(MAX_INPUT_CHARS + 1)));
 });

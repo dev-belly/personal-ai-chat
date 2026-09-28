@@ -51,6 +51,16 @@ test("validateMessages rejects invalid roles and oversized content", () => {
   );
 });
 
+test("a long model reply can be included in the next bounded request", () => {
+  const result = validateMessages([
+    { role: "user", content: "Explain the plan" },
+    { role: "assistant", content: "reply ".repeat(2_000) },
+    { role: "user", content: "Continue" },
+  ]);
+  assert.equal(result.ok, true);
+  assert.equal(result.messages[1].content.length, 12_000);
+});
+
 test("readJsonBody rejects malformed and oversized payloads", async () => {
   await assert.rejects(
     readJsonBody(
