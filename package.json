@@ -21,7 +21,6 @@
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "1.20.4",
-    "rclone.js": "0.6.6",
     "wrangler": "4.127.1"
   },
   "engines": {
