@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildConversation, localDemoReply, MAX_INPUT_CHARS, shouldSubmit, waitForDemo } from '../lib/chat-client.mjs';
-import { authorizeRequest, validateMessages } from '../lib/chat-validation.mjs';
+import { authorizeRequest, MAX_REQUEST_BYTES, readJsonBody, validateMessages } from '../lib/chat-validation.mjs';
 
 test('retry and following requests exclude failed user attempts', () => {
   const previous = [
@@ -34,6 +34,23 @@ test('a long assistant reply remains usable on the following turn', () => {
   assert.equal(validateMessages(next).ok, true);
   assert.equal(next[1].content.length, 12_000);
 });
+
+for (const [label, character] of [['Chinese', '中'], ['JSON escapes', '\0']]) {
+  test(`${label} history stays within the server's encoded request limit`, async () => {
+    const previous = [
+      { role: 'user', content: character.repeat(8_000), status: 'sent' },
+      { role: 'assistant', content: character.repeat(16_000) },
+    ];
+    const text = character.repeat(8_000);
+    const next = buildConversation(previous, text);
+    const body = JSON.stringify({ messages: next });
+    assert.ok(Buffer.byteLength(body, 'utf8') <= MAX_REQUEST_BYTES);
+    assert.equal(next.at(-1).content, text);
+    assert.equal(next.length % 2, 1);
+    const parsed = await readJsonBody(new Request('https://example.test', { method: 'POST', body }));
+    assert.equal(validateMessages(parsed.messages).ok, true);
+  });
+}
 
 test('oversized input rejects immediately', () => {
   assert.throws(() => buildConversation([], 'x'.repeat(MAX_INPUT_CHARS + 1)));
