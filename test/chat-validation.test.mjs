@@ -15,6 +15,9 @@ test("access-token configuration requires a strong, unpadded secret", () => {
   assert.equal(isValidAccessTokenConfiguration("x".repeat(32)), true);
   assert.equal(isValidAccessTokenConfiguration("short"), false);
   assert.equal(isValidAccessTokenConfiguration(` ${"x".repeat(32)}`), false);
+  for (const token of ['中文'.repeat(16), 'é'.repeat(32), 'x'.repeat(32) + '\ny', 'x'.repeat(16) + ' ' + 'y'.repeat(16)]) {
+    assert.equal(isValidAccessTokenConfiguration(token), false);
+  }
 });
 
 test("authorizeRequest accepts only an exact bearer token", () => {
