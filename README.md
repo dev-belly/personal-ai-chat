@@ -69,10 +69,12 @@ Windows 用户也可以运行 `./deploy-cloudflare.ps1`；脚本不会读取、�
 npm test
 npm run build
 npm run build:worker
-npm audit --omit=dev
+npm audit
 ```
 
 GitHub Actions 会在每次推送和 Pull Request 上执行同样的测试、依赖审计及双重构建。
+
+依赖审计包含生产包与构建工具。`package.json` 将 Express 的 `body-parser` 和 Miniflare 的 `undici` 分别固定到同一主版本内已修复的 2.4.0 和 7.30.1。上游依赖更新后可评估移除这些定向覆盖；调整覆盖后需要重新验证 Next.js 与 Worker 两种构建。
 
 聊天内容仅保留在当前页面。真实请求最多携带最近 40 条 / 32,000 字符以内的完整对话轮次，并按序列化后的 UTF-8 请求体保持在 64 KiB 以内；中文或转义字符较多时会提前移除最旧的完整轮次。失败的发送不进入后续模型上下文。单条输入最多 8,000 字符。取消会停止浏览器等待，已提交的上游模型请求是否停止计费取决于服务端。
 
