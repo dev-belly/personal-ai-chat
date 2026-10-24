@@ -34,8 +34,6 @@
     "express": {
       "body-parser": "2.4.0"
     },
-    "miniflare": {
-      "undici": "7.30.1"
-    }
+    "undici": "7.30.1"
   }
 }
