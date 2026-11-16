@@ -12,7 +12,8 @@
     "test": "node --test",
     "check:http": "node scripts/check-http.mjs",
     "check": "npm test && npm run build && npm run check:http && npm run build:worker",
-    "start": "next start"
+    "start": "next start",
+    "check:browser": "node scripts/check-browser.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.39.0",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "1.20.4",
+    "playwright": "1.65.1",
     "wrangler": "4.149.0"
   },
   "engines": {

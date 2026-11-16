@@ -8,3 +8,4 @@ node_modules/
 !.dev.vars.example
 *.log
 start-dev.bat
+test-results/
