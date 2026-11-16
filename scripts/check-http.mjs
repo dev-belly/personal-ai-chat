@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readChatResponse } from '../lib/chat-transport.mjs';
 
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -13,13 +14,50 @@ const apiKey = 'local-upstream-fixture-only';
 let upstreamMode = 'text';
 const calls = [];
 let checks = 0;
+let heldStream;
+
+async function streamFixture(response, mode) {
+  response.setHeader('Content-Type', 'text/event-stream');
+  const event = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+  event('message_start', { message: { id: 'msg_fixture', type: 'message', role: 'assistant',
+    content: [], model: 'fixture-model', usage: { input_tokens: 1, output_tokens: 0 } } });
+  event('content_block_start', { index: 0, content_block: mode === 'tool'
+    ? { type: 'tool_use', id: 'fixture-tool', name: 'fixture', input: {} }
+    : { type: 'text', text: '' } });
+  if (mode === 'tool') event('content_block_delta', { index: 0,
+    delta: { type: 'input_json_delta', partial_json: '{"private_tool_input":true}' } });
+  const text = (value) => event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: value } });
+  if (mode === 'held') {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markClosed;
+    const closed = new Promise((resolve) => { markClosed = resolve; });
+    heldStream = { release, closed };
+    response.once('close', () => { markClosed(); release(); });
+    text('第一段');
+    await gate;
+    if (response.destroyed) return;
+    text('第二段🙂');
+  } else if (mode === 'whitespace') text(' \n ');
+  else if (mode === 'oversized') text('x'.repeat(32_001));
+  else if (mode !== 'empty' && mode !== 'tool') text('来自本地流式测试的回复🙂');
+  if (mode === 'stream-error') {
+    event('error', { error: { type: 'overloaded_error', message: 'PRIVATE_UPSTREAM_DETAIL_MUST_NOT_LEAK' } });
+  } else if (mode !== 'incomplete') {
+    event('content_block_stop', { index: 0 });
+    event('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } });
+    event('message_stop', {});
+  }
+  response.end();
+}
 
 // The model boundary is a loopback fixture. These checks never use real keys,
 // contact a model provider or modify an existing deployment.
 const upstream = createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
-  calls.push({ path: request.url, key: request.headers['x-api-key'], body: JSON.parse(body) });
+  const payload = JSON.parse(body);
+  calls.push({ path: request.url, key: request.headers['x-api-key'], body: payload });
   response.setHeader('Content-Type', 'application/json');
   if (upstreamMode === 'auth' || upstreamMode === 'rate') {
     response.statusCode = upstreamMode === 'auth' ? 401 : 429;
@@ -29,6 +67,7 @@ const upstream = createServer(async (request, response) => {
     } }));
     return;
   }
+  if (payload.stream) return streamFixture(response, upstreamMode);
   const content = upstreamMode === 'empty' ? []
     : upstreamMode === 'whitespace' ? [{ type: 'text', text: ' \n ' }]
     : upstreamMode === 'tool' ? [{ type: 'tool_use', id: 'fixture-tool', name: 'fixture', input: {} }]
@@ -95,13 +134,23 @@ async function check(label, operation) {
   console.log(`PASS ${label}`);
 }
 
+async function within(promise, ms = 5_000) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('stream fixture timed out')), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 let app;
 try {
   const upstreamPort = await listen(upstream);
   app = await start(upstreamPort);
-  const post = (body, token = accessToken) => fetch(`${app.origin}/api/chat`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: typeof body === 'string' ? body : JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+  const post = (body, token = accessToken, options = {}) => fetch(`${app.origin}/api/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`,
+      Accept: options.stream ? 'text/event-stream' : 'application/json' },
+    body: typeof body === 'string' ? body : JSON.stringify(body), signal: options.signal || AbortSignal.timeout(10_000),
   });
   const valid = { messages: [{ role: 'user', content: '你好，HTTP 测试' }] };
 
@@ -157,6 +206,67 @@ try {
       assert.equal(Object.hasOwn(body, 'content'), false);
     });
   }
+  await check('SSE authentication and validation cannot bypass the request boundary', async () => {
+    const before = calls.length;
+    for (const [body, token, status] of [[valid, 'wrong', 401], ['{', accessToken, 400]]) {
+      const response = await post(body, token, { stream: true });
+      assert.equal(response.status, status);
+      assert.match(response.headers.get('content-type'), /application\/json/);
+    }
+    assert.equal(calls.length, before);
+  });
+  await check('SSE reaches the browser before the upstream final message is released', async () => {
+    upstreamMode = 'held';
+    let firstDelta;
+    const first = new Promise((resolve) => { firstDelta = resolve; });
+    const response = await post(valid, accessToken, { stream: true });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(response.headers.get('x-request-id'), /^[\da-f-]{36}$/);
+    const before = calls.length;
+    const reading = readChatResponse(response, { onDelta: (text) => { if (text === '第一段') firstDelta(); } });
+    try {
+      await within(Promise.race([first, reading.then(() => { throw new Error('completed before first delta'); })]));
+      assert.equal(calls.at(-1).body.stream, true);
+      assert.deepEqual(calls.at(-1).body.messages, valid.messages);
+    } finally { heldStream.release(); }
+    assert.equal(await reading, '第一段第二段🙂');
+    assert.equal(calls.length, before);
+  });
+  for (const mode of ['empty', 'whitespace', 'tool', 'incomplete', 'stream-error', 'oversized']) {
+    await check(`SSE ${mode} emits a sanitized error instead of completion`, async () => {
+      upstreamMode = mode;
+      const before = calls.length;
+      const response = await post(valid, accessToken, { stream: true });
+      const body = await response.text();
+      assert.match(body, /event: error/);
+      assert.doesNotMatch(body, /event: done|PRIVATE_UPSTREAM_DETAIL|local-upstream-fixture-only/);
+      assert.equal(calls.length, before + 1);
+    });
+  }
+  for (const [mode, status] of [['auth', 502], ['rate', 429]]) {
+    await check(`SSE opening ${mode} error preserves HTTP status and makes one upstream request`, async () => {
+      upstreamMode = mode;
+      const before = calls.length;
+      const response = await post(valid, accessToken, { stream: true });
+      assert.equal(response.status, status);
+      assert.doesNotMatch(await response.text(), /PRIVATE_UPSTREAM_DETAIL/);
+      assert.equal(calls.length, before + 1);
+    });
+  }
+  await check('disconnecting a live HTTP stream closes the upstream connection', async () => {
+    upstreamMode = 'held';
+    const controller = new AbortController();
+    let firstDelta;
+    const first = new Promise((resolve) => { firstDelta = resolve; });
+    const response = await post(valid, accessToken, { stream: true, signal: controller.signal });
+    const reading = readChatResponse(response, { signal: controller.signal, onDelta: () => firstDelta() });
+    await within(Promise.race([first, reading]));
+    controller.abort();
+    await assert.rejects(reading, { name: 'AbortError' });
+    await within(heldStream.closed);
+  });
   await stop(app.child);
   app = await start(upstreamPort, false);
   await check('unconfigured service returns 503 without contacting the upstream', async () => {

@@ -1,20 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { buildConversation, localDemoReply, MAX_INPUT_CHARS, shouldSubmit, waitForDemo } from "../lib/chat-client.mjs";
+import { MAX_INPUT_CHARS, shouldSubmit } from "../lib/chat-client.mjs";
+import { useChat } from "./hooks/use-chat";
 import "./globals.css";
 
 export default function Home() {
   const [mode, setMode] = useState("demo");
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
   const [accessToken, setAccessToken] = useState("");
-  const [loading, setLoading] = useState(false);
   const [service, setService] = useState("checking");
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [storageWarning, setStorageWarning] = useState(false);
-  const activeRequest = useRef(null);
-  const generation = useRef(0);
+  const { messages, loading, input, setInput, sendMessage, clearChat, cancelRequest } = useChat({
+    mode, accessToken, ready: service === "ready",
+  });
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -22,7 +21,6 @@ export default function Home() {
   useEffect(() => {
     try { setAccessToken(sessionStorage.getItem("chat-access-token") || ""); }
     catch { setStorageWarning(true); }
-    return () => { generation.current += 1; activeRequest.current?.abort(); };
   }, []);
   useEffect(() => {
     if (mode !== "live") return;
@@ -43,59 +41,6 @@ export default function Home() {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
     }
   }, [input]);
-
-  async function sendMessage(override) {
-    const text = (typeof override === "string" ? override : input).trim();
-    if (!text || text.length > MAX_INPUT_CHARS || activeRequest.current) return;
-    if (mode === "live" && (!accessToken.trim() || service !== "ready")) return;
-    const controller = new AbortController();
-    activeRequest.current = controller;
-    const requestId = ++generation.current;
-    const userMsg = { role: "user", content: text, status: "pending", id: requestId };
-    const history = buildConversation(messages, text);
-    setMessages((previous) => [...previous, userMsg]);
-    setInput("");
-    setLoading(true);
-    let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 60_000);
-    try {
-      let content;
-      if (mode === "demo") {
-        await waitForDemo(controller.signal);
-        content = localDemoReply(text);
-      } else {
-        const response = await fetch("/api/chat", {
-          method: "POST", signal: controller.signal,
-          headers: { Authorization: `Bearer ${accessToken.trim()}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history }),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(typeof data?.error === "string" ? data.error : `请求失败（HTTP ${response.status}）`);
-        if (typeof data?.content !== "string" || !data.content.trim()) throw new Error("服务返回了无效响应，请重试");
-        content = data.content;
-      }
-      if (requestId !== generation.current) return;
-      setMessages((previous) => [...previous.map((item) => item.id === requestId ? { ...item, status: "sent" } : item), { role: "assistant", content }]);
-    } catch (error) {
-      if (requestId !== generation.current) return;
-      const content = controller.signal.aborted
-        ? (timedOut ? "请求超时，请重试。" : "已取消本次请求。")
-        : (error instanceof TypeError ? "网络连接失败，请检查连接后重试。" : error.message);
-      setMessages((previous) => [...previous.map((item) => item.id === requestId ? { ...item, status: "failed" } : item), { role: "error", content, retryText: text }]);
-    } finally {
-      clearTimeout(timeout);
-      if (requestId === generation.current) { activeRequest.current = null; setLoading(false); }
-    }
-  }
-
-  function clearChat() {
-    generation.current += 1;
-    activeRequest.current?.abort();
-    activeRequest.current = null;
-    setLoading(false);
-    setMessages([]);
-    setInput("");
-  }
 
   function updateAccessToken(value) {
     setAccessToken(value);
@@ -137,12 +82,16 @@ export default function Home() {
           <div className="messages">
             {messages.map((message, index) => (
               <div key={index} className={"message " + message.role}>
-                <div className="message-content">{message.role === "user" ? "你" : message.role === "assistant" ? (mode === "demo" ? "本地模拟回复" : "AI") : "提示"}</div>
+                <div className="message-content">{message.role === "user" ? "你" : message.role === "assistant" ? (mode === "demo" ? "本地模拟回复" : "AI") : "提示"}
+                  {message.status === "streaming" && " · 正在回复"}
+                  {message.status === "incomplete" && " · 未完成回复"}
+                </div>
                 <div className="message-text">{message.content.split("\n").map((line, lineIndex) => <p key={lineIndex}>{line || "\u00A0"}</p>)}</div>
+                {message.requestId && <small className="input-hint">请求编号：{message.requestId}</small>}
                 {message.retryText && index === messages.length - 1 && <button className="clear-btn retry-btn" disabled={loading || !canSend} onClick={() => sendMessage(message.retryText)}>重试这条消息</button>}
               </div>
             ))}
-            {loading && <div className="message assistant"><div className="message-content">{mode === "demo" ? "加载模拟回复" : "等待模型回复"}</div><div className="message-text typing"><span className="dot"/><span className="dot"/><span className="dot"/></div></div>}
+            {loading && !messages.some((message) => message.status === "streaming") && <div className="message assistant"><div className="message-content">{mode === "demo" ? "加载模拟回复" : "等待模型回复"}</div><div className="message-text typing"><span className="dot"/><span className="dot"/><span className="dot"/></div></div>}
             <div ref={messagesEndRef}/>
           </div>
         )}
@@ -150,7 +99,7 @@ export default function Home() {
       <footer className="input-area">
         <div className="input-wrapper">
           <textarea ref={textareaRef} aria-label="消息内容" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (shouldSubmit(event)) { event.preventDefault(); sendMessage(); } }} placeholder="输入消息… Enter 发送，Shift+Enter 换行" rows={1} maxLength={MAX_INPUT_CHARS} disabled={loading}/>
-          {loading ? <button className="clear-btn" onClick={() => activeRequest.current?.abort()}>取消</button> : <button className="send-btn" onClick={() => sendMessage()} disabled={!input.trim() || !canSend} aria-label="Send message">↑</button>}
+          {loading ? <button className="clear-btn" onClick={cancelRequest}>取消</button> : <button className="send-btn" onClick={() => sendMessage()} disabled={!input.trim() || !canSend} aria-label="Send message">↑</button>}
         </div>
         <p className="input-hint">{mode === "demo" ? "模拟内容不代表真实 AI 能力。" : "请求仅携带最近的完整对话轮次，最多 40 条 / 32,000 字符。"}</p>
       </footer>

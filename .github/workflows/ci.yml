@@ -37,4 +37,15 @@ jobs:
       - run: npm audit
       - run: npm run build
       - run: npm run check:http
+      - name: Install Chromium for real browser checks
+        run: npx playwright install --with-deps chromium
+      - run: npm run check:browser
+      - name: Keep browser verification screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chat-browser-checks
+          path: test-results/*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - run: npm run build:worker
