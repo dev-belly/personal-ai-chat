@@ -154,7 +154,7 @@ try {
   await page.getByText('第一段', { exact: true }).waitFor();
   await page.getByText('AI · 正在回复', { exact: true }).waitFor();
   assert.equal(await input.isDisabled(), true);
-  await page.screenshot({ path: `${screenshots}/stream-desktop.png` });
+  await page.screenshot({ path: `${screenshots}/stream-desktop.png`, animations: 'disabled' });
   held.release();
   await page.getByText('第一段第二段🙂', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Send message', exact: true }).waitFor();
@@ -203,7 +203,7 @@ try {
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     true,
   );
-  await page.screenshot({ path: `${screenshots}/stream-mobile.png` });
+  await page.screenshot({ path: `${screenshots}/stream-mobile.png`, animations: 'disabled' });
   assert.deepEqual(errors, []);
   console.log('PASS mobile layout, mode switch and no browser runtime errors');
 } catch (error) {
