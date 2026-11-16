@@ -8,6 +8,8 @@
 
 选择“真实服务”后，页面先检查部署是否完成配置；缺少配置时会明确显示原因并保持发送禁用。配置完成后输入独立访问口令，即可连接实际模型。请求失败可重试，取消/新建会话/切换模式不会把旧响应写进新会话；中文输入法确认文字时不会误发送。
 
+[工程实现与接口验证](docs/ENGINEERING.zh-CN.md)：从 React 页面到服务端路由、上下文预算及真实 HTTP 测试。
+
 ## 安全设计
 
 - 浏览器只保存独立的 `CHAT_ACCESS_TOKEN`，不会接触上游 API Key。
@@ -68,13 +70,25 @@ Windows 用户也可以运行 `./deploy-cloudflare.ps1`；脚本不会读取、�
 ```bash
 npm test
 npm run build
+npm run check:http
 npm run build:worker
 npm audit
 ```
 
 GitHub Actions 会在每次推送和 Pull Request 上执行同样的测试、依赖审计及双重构建。
 
+`check:http` 使用已有生产构建，启动真实 Next.js 服务和回环地址上的模型替身，检查 12 项接口行为。
+它覆盖配置、口令、请求校验、中文消息、上游错误，以及空内容、空白文本和纯工具响应。
+全程使用测试口令，不调用真实模型、不需要 `.env.local`，也不会发布网站。
+上游没有返回有效文本时，接口返回 502，页面保留失败与重试状态，不将占位文字写入后续模型上下文。
+
 依赖审计包含生产包与构建工具。`package.json` 将 Express 的 `body-parser` 和 Miniflare 的 `undici` 分别固定到同一主版本内已修复的 2.4.0 和 7.30.1。上游依赖更新后可评估移除这些定向覆盖；调整覆盖后需要重新验证 Next.js 与 Worker 两种构建。
+
+OpenNext 构建链中的 `glob` 另以定向覆盖固定为 14.0.6，锁文件解析到 `minimatch` 11.0.8，处理
+[glob](https://github.com/isaacs/node-glob/security/advisories/GHSA-3g3m-2fjr-6pw4) 与
+[minimatch](https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249) 的公开问题。
+该覆盖跨越了间接依赖的主版本，因此额外用 OpenNext 实际引用的压缩器验证字符串与数组通配符输入，
+执行压缩后的 JavaScript 核对行为，并重新验证生产与 Workers 构建。
 
 聊天内容仅保留在当前页面。真实请求最多携带最近 40 条 / 32,000 字符以内的完整对话轮次，并按序列化后的 UTF-8 请求体保持在 64 KiB 以内；中文或转义字符较多时会提前移除最旧的完整轮次。失败的发送不进入后续模型上下文。单条输入最多 8,000 字符。取消会停止浏览器等待，已提交的上游模型请求是否停止计费取决于服务端。
 

@@ -1,0 +1,173 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+
+const require = createRequire(import.meta.url);
+const root = fileURLToPath(new URL('../', import.meta.url));
+const accessToken = 'local-http-smoke-'.repeat(3);
+const apiKey = 'local-upstream-fixture-only';
+let upstreamMode = 'text';
+const calls = [];
+let checks = 0;
+
+// The model boundary is a loopback fixture. These checks never use real keys,
+// contact a model provider or modify an existing deployment.
+const upstream = createServer(async (request, response) => {
+  let body = '';
+  for await (const chunk of request) body += chunk;
+  calls.push({ path: request.url, key: request.headers['x-api-key'], body: JSON.parse(body) });
+  response.setHeader('Content-Type', 'application/json');
+  if (upstreamMode === 'auth' || upstreamMode === 'rate') {
+    response.statusCode = upstreamMode === 'auth' ? 401 : 429;
+    response.end(JSON.stringify({ type: 'error', error: {
+      type: upstreamMode === 'auth' ? 'authentication_error' : 'rate_limit_error',
+      message: 'PRIVATE_UPSTREAM_DETAIL_MUST_NOT_LEAK',
+    } }));
+    return;
+  }
+  const content = upstreamMode === 'empty' ? []
+    : upstreamMode === 'whitespace' ? [{ type: 'text', text: ' \n ' }]
+    : upstreamMode === 'tool' ? [{ type: 'tool_use', id: 'fixture-tool', name: 'fixture', input: {} }]
+    : [{ type: 'text', text: '来自本地 HTTP 测试的回复' }];
+  response.end(JSON.stringify({
+    id: 'msg_local_fixture', type: 'message', role: 'assistant', model: 'local-fixture',
+    content, stop_reason: 'end_turn', stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  }));
+});
+
+async function listen(server) {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  return server.address().port;
+}
+
+async function stop(child) {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, 'exit');
+  const timer = setTimeout(() => child.kill('SIGKILL'), 5_000);
+  try { child.kill('SIGTERM'); await exited; }
+  finally { clearTimeout(timer); }
+}
+
+async function start(upstreamPort, configured = true) {
+  const reservation = createServer();
+  const port = await listen(reservation);
+  await new Promise((resolve) => reservation.close(resolve));
+  const child = spawn(process.execPath, [require.resolve('next/dist/bin/next'),
+    'start', '--hostname', '127.0.0.1', '--port', String(port)], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
+      ANTHROPIC_API_KEY: configured ? apiKey : '', CLAUDE_MODEL: 'local-fixture',
+      CHAT_ACCESS_TOKEN: accessToken, ANTHROPIC_BASE_URL: `http://127.0.0.1:${upstreamPort}` },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  let spawnError;
+  child.on('error', (error) => { spawnError = error; });
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.on('data', (chunk) => { output = (output + chunk).slice(-16_000); });
+  }
+  const origin = `http://127.0.0.1:${port}`;
+  try {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (spawnError) throw spawnError;
+      if (child.exitCode !== null) throw new Error(`Next.js exited before readiness: ${output}`);
+      try {
+        const response = await fetch(`${origin}/api/chat`, { signal: AbortSignal.timeout(1_000) });
+        await response.arrayBuffer();
+        if (response.ok) return { child, origin };
+      } catch { /* A refused connection is normal while the process starts. */ }
+      await delay(100);
+    }
+    throw new Error(`Next.js readiness timed out: ${output}`);
+  } catch (error) { await stop(child); throw error; }
+}
+
+async function check(label, operation) {
+  await operation();
+  checks += 1;
+  console.log(`PASS ${label}`);
+}
+
+let app;
+try {
+  const upstreamPort = await listen(upstream);
+  app = await start(upstreamPort);
+  const post = (body, token = accessToken) => fetch(`${app.origin}/api/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: typeof body === 'string' ? body : JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+  });
+  const valid = { messages: [{ role: 'user', content: '你好，HTTP 测试' }] };
+
+  await check('readiness reveals configuration only and is not cached', async () => {
+    const response = await fetch(`${app.origin}/api/chat`);
+    assert.deepEqual(await response.json(), { configured: true });
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.equal(calls.length, 0);
+  });
+  await check('invalid access token does not call the upstream', async () => {
+    assert.equal((await post(valid, 'wrong')).status, 401);
+    assert.equal(calls.length, 0);
+  });
+  for (const [label, body, status] of [
+    ['malformed JSON', '{', 400],
+    ['invalid message roles', { messages: [{ role: 'assistant', content: 'invalid' }] }, 400],
+    ['oversized request', 'x'.repeat(64 * 1024 + 1), 413],
+  ]) {
+    await check(`${label} is rejected before any upstream call`, async () => {
+      assert.equal((await post(body)).status, status);
+      assert.equal(calls.length, 0);
+    });
+  }
+  await check('a real HTTP request forwards normalized messages and returns text', async () => {
+    const response = await post({ messages: [{ ...valid.messages[0], ignored: 'not forwarded' }] });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { content: '来自本地 HTTP 测试的回复' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].path, '/v1/messages');
+    assert.equal(calls[0].key, apiKey);
+    assert.deepEqual(calls[0].body.messages, valid.messages);
+    assert.equal(calls[0].body.model, 'local-fixture');
+  });
+  for (const [mode, status] of [['auth', 502], ['rate', 429]]) {
+    await check(`upstream ${mode} failure is sanitized without automatic retries`, async () => {
+      upstreamMode = mode;
+      const before = calls.length;
+      const response = await post(valid);
+      assert.equal(response.status, status);
+      const body = await response.json();
+      assert.equal(typeof body.error, 'string');
+      assert.doesNotMatch(JSON.stringify(body), /PRIVATE_UPSTREAM_DETAIL|local-upstream-fixture-only/);
+      assert.equal(calls.length, before + 1);
+    });
+  }
+  for (const mode of ['empty', 'whitespace', 'tool']) {
+    await check(`${mode} upstream content cannot become a successful assistant message`, async () => {
+      upstreamMode = mode;
+      const response = await post(valid);
+      assert.equal(response.status, 502);
+      const body = await response.json();
+      assert.equal(typeof body.error, 'string');
+      assert.equal(Object.hasOwn(body, 'content'), false);
+    });
+  }
+  await stop(app.child);
+  app = await start(upstreamPort, false);
+  await check('unconfigured service returns 503 without contacting the upstream', async () => {
+    const before = calls.length;
+    assert.deepEqual(await (await fetch(`${app.origin}/api/chat`)).json(), { configured: false });
+    assert.equal((await post(valid)).status, 503);
+    assert.equal(calls.length, before);
+  });
+  console.log(`HTTP checks passed: ${checks}; local fixture only, no model calls.`);
+} finally {
+  if (app) await stop(app.child);
+  upstream.closeAllConnections();
+  await new Promise((resolve) => upstream.close(resolve));
+}

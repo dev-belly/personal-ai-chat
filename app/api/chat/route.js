@@ -57,10 +57,17 @@ export async function POST(request) {
     });
 
     const content =
-      response.content
-        .filter((block) => block.type === "text")
+      (Array.isArray(response.content) ? response.content : [])
+        .filter((block) => block?.type === "text" && typeof block.text === "string")
         .map((block) => block.text)
-        .join("") || "(无响应内容)";
+        .join("");
+
+    if (!content.trim()) {
+      return Response.json(
+        { error: "上游服务未返回有效文本，请重试" },
+        { status: 502 }
+      );
+    }
 
     return Response.json({ content });
   } catch (error) {
