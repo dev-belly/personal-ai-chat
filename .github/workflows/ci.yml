@@ -36,4 +36,5 @@ jobs:
       - run: npm test
       - run: npm audit
       - run: npm run build
+      - run: npm run check:http
       - run: npm run build:worker
