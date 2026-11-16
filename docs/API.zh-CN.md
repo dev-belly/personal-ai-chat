@@ -1,11 +1,57 @@
-# 聊天接口：JSON 与流式协议
+# 聊天接口：标准消息流与兼容协议
+
+| 路径 | 用途 |
+| --- | --- |
+| GET `/api/chat` | 公开的配置就绪状态 |
+| POST `/api/chat/ui` | 浏览器默认使用的 AI SDK UIMessage Stream v1 |
+| POST `/api/chat` | 保留原有 JSON 与具名 SSE 调用 |
 
 ## 配置状态
 
 `GET /api/chat` 返回 `{ "configured": true | false }` 与 `Cache-Control: no-store`。
 它不验证访问口令，只说明部署是否具备必需配置，不返回密钥、令牌或模型 ID。
 
-## 发送消息
+## 标准 UI 消息流
+
+`POST /api/chat/ui` 使用同样的独立 Bearer 口令，输入遵循共享 Zod Schema：
+
+```json
+{
+  "messages": [
+    { "id": "context-0", "role": "user", "parts": [{ "type": "text", "text": "你好" }] }
+  ]
+}
+```
+
+仅接受 user / assistant 文本 parts。system、工具、文件等不支持的输入在调用模型前返回 400。
+实际包含 ID 与 parts 的 UTF-8 请求体也限制为 64 KiB，角色、字符数和轮次规则与兼容接口一致。
+
+响应带 `x-vercel-ai-ui-message-stream: v1`，由 AI SDK `createUIMessageStreamResponse` 编码。
+浏览器使用官方 `DefaultChatTransport` 和 `readUIMessageStream` 处理：
+
+```text
+data: {"type":"start","messageId":"example-id","messageMetadata":{"requestId":"example-id"}}
+
+data: {"type":"text-start","id":"example-id"}
+
+data: {"type":"text-delta","id":"example-id","delta":"你好"}
+
+data: {"type":"text-end","id":"example-id"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+
+```
+
+`example-id` 仅示意格式；实际 ID 是服务端生成的 UUID，元数据必须与 `X-Request-ID` 一致。
+应用必须收到有效 `finish` 且文本非空，才把本轮加入后续上下文；仅收到 `[DONE]` 或连接结束不等于成功。
+流内错误遵循标准 `{ "type": "error", "errorText": "公开说明" }`，不会再发送 `finish`。
+请求编号从开始事件的元数据或响应头读取，内部错误码只进入服务端的公开错误日志。
+
+两种上游模型协议使用相同 UI 流契约，供应商只能由部署环境选择。详见[架构文档](ARCHITECTURE.zh-CN.md)。
+
+## 兼容接口：发送消息
 
 `POST /api/chat` 要求 `Content-Type: application/json` 和
 `Authorization: Bearer <独立访问口令>`。上游模型密钥仅保留在服务端。

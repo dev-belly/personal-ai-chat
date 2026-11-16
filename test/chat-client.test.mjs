@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildConversation, localDemoReply, MAX_INPUT_CHARS, shouldSubmit, waitForDemo } from '../lib/chat-client.mjs';
-import { authorizeRequest, MAX_REQUEST_BYTES, readJsonBody, validateMessages } from '../lib/chat-validation.mjs';
+import { buildConversation, localDemoReply, MAX_INPUT_CHARS, shouldSubmit, waitForDemo } from '../lib/chat-client.ts';
+import { authorizeRequest, MAX_REQUEST_BYTES, readJsonBody, validateMessages } from '../lib/chat-validation.ts';
 
 test('retry and following requests exclude failed user attempts', () => {
   const previous = [

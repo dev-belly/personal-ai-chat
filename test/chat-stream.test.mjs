@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeChatEvent, MAX_EVENT_CHARS, MAX_REPLY_CHARS } from '../lib/chat-protocol.mjs';
-import { readChatResponse } from '../lib/chat-transport.mjs';
-import { buildConversation } from '../lib/chat-client.mjs';
-import { chatReducer, initialChatState } from '../lib/chat-state.mjs';
+import { encodeChatEvent, MAX_EVENT_CHARS, MAX_REPLY_CHARS } from '../lib/chat-protocol.ts';
+import { readChatResponse } from '../lib/chat-transport.ts';
+import { buildConversation } from '../lib/chat-client.ts';
+import { chatReducer, initialChatState } from '../lib/chat-state.ts';
 
 function responseFor(bytes, { split = 1, onCancel = () => {} } = {}) {
   let offset = 0;

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createChatHandler, wantsEventStream } from '../lib/server/chat-handler.mjs';
-import { createRequestScope, publicChatError } from '../lib/server/chat-service.mjs';
-import { readChatResponse } from '../lib/chat-transport.mjs';
+import { createChatHandler, wantsEventStream } from '../lib/server/chat-handler.ts';
+import { createRequestScope, publicChatError } from '../lib/server/chat-service.ts';
+import { readChatResponse } from '../lib/chat-transport.ts';
 
 const env = {
   ANTHROPIC_API_KEY: 'fixture-only',

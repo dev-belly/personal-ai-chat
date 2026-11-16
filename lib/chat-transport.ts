@@ -1,7 +1,10 @@
-import { MAX_EVENT_CHARS, MAX_REPLY_CHARS } from './chat-protocol.mjs';
+import { legacyReplySchema, publicErrorSchema } from './chat-contract.ts';
+import { MAX_EVENT_CHARS, MAX_REPLY_CHARS } from './chat-protocol.ts';
 
 export class ChatResponseError extends Error {
-  constructor(message, requestId, code = 'invalid_response') {
+  readonly requestId: string | undefined;
+  readonly code: string;
+  constructor(message: string, requestId?: string, code = 'invalid_response') {
     super(message);
     this.name = 'ChatResponseError';
     this.requestId = requestId;
@@ -9,7 +12,7 @@ export class ChatResponseError extends Error {
   }
 }
 
-function parseEvent(frame) {
+function parseEvent(frame: string): { event: string; data: Record<string, unknown> } | null {
   let event = 'message';
   const data = [];
   for (const line of frame.split(/\r?\n/)) {
@@ -20,33 +23,39 @@ function parseEvent(frame) {
     if (field === 'event') event = value;
     if (field === 'data') data.push(value);
   }
-  return data.length ? { event, data: JSON.parse(data.join('\n')) } : null;
+  if (!data.length) return null;
+  const parsed: unknown = JSON.parse(data.join('\n'));
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new Error('invalid event');
+  return { event, data: parsed as Record<string, unknown> };
 }
 
 // Uses fetch rather than EventSource: POST and the private Authorization header
 // stay supported. A clean TCP EOF is not proof of application-level completion.
-export async function readChatResponse(response, { onDelta = () => {}, signal } = {}) {
+export interface ReadReplyOptions {
+  onDelta?: (content: string) => void;
+  signal?: AbortSignal;
+}
+
+export async function readChatResponse(
+  response: Response,
+  { onDelta = () => {}, signal }: ReadReplyOptions = {},
+): Promise<string> {
   let requestId = response.headers.get('x-request-id') || undefined;
-  const fail = (message = '回复传输中断，请重试', code) =>
+  const fail = (message = '回复传输中断，请重试', code?: string) =>
     new ChatResponseError(message, requestId, code);
   if (!response.ok) {
-    const data = await response.json().catch(() => null);
+    const parsed = publicErrorSchema.safeParse(await response.json().catch(() => null));
     throw fail(
-      typeof data?.error === 'string' ? data.error : `请求失败（HTTP ${response.status}）`,
-      data?.code,
+      parsed.success ? parsed.data.error : `请求失败（HTTP ${response.status}）`,
+      parsed.success ? parsed.data.code : undefined,
     );
   }
   if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
-    const data = await response.json().catch(() => null);
-    if (
-      typeof data?.content !== 'string' ||
-      !data.content.trim() ||
-      data.content.length > MAX_REPLY_CHARS
-    ) {
-      throw fail('服务返回了无效响应，请重试');
-    }
+    const parsed = legacyReplySchema.safeParse(await response.json().catch(() => null));
+    if (!parsed.success) throw fail('服务返回了无效响应，请重试');
     signal?.throwIfAborted();
-    return data.content;
+    return parsed.data.content;
   }
   if (!response.body) throw fail();
   const reader = response.body.getReader();
@@ -83,7 +92,10 @@ export async function readChatResponse(response, { onDelta = () => {}, signal } 
           if (content.length > MAX_REPLY_CHARS) throw fail('回复内容过长，请重试');
           onDelta(content);
         } else if (item.event === 'error') {
-          throw fail(typeof data?.error === 'string' ? data.error : undefined, data?.code);
+          throw fail(
+            typeof data.error === 'string' ? data.error : undefined,
+            typeof data.code === 'string' ? data.code : undefined,
+          );
         } else if (item.event === 'done') {
           if (!started || !content.trim()) throw fail('上游服务未返回有效文本，请重试');
           return content;
