@@ -1,7 +1,9 @@
-import { MAX_REPLY_CHARS } from '../chat-protocol.mjs';
+import { MAX_REPLY_CHARS } from '../chat-protocol.ts';
 
 export class ChatError extends Error {
-  constructor(message, code, status = 502) {
+  readonly code: string;
+  readonly status: number;
+  constructor(message: string, code: string, status = 502) {
     super(message);
     this.name = 'ChatError';
     this.code = code;
@@ -9,7 +11,7 @@ export class ChatError extends Error {
   }
 }
 
-export function validateReply(content) {
+export function validateReply(content: unknown): string {
   if (typeof content !== 'string' || !content.trim()) {
     throw new ChatError('上游服务未返回有效文本，请重试', 'empty_reply');
   }
@@ -21,7 +23,7 @@ export function validateReply(content) {
 
 // The service consumes text, not vendor event shapes. An interrupted provider
 // iterator must throw rather than silently completing a partial reply.
-export async function* validateTextStream(source) {
+export async function* validateTextStream(source: AsyncIterable<unknown>): AsyncGenerator<string> {
   let length = 0;
   let hasText = false;
   for await (const delta of source) {
@@ -36,24 +38,27 @@ export async function* validateTextStream(source) {
   if (!hasText) throw new ChatError('上游服务未返回有效文本，请重试', 'empty_reply');
 }
 
-export function publicChatError(error, timedOut = false) {
-  if (timedOut || error?.name === 'APIConnectionTimeoutError') {
+export function publicChatError(error: unknown, timedOut = false): PublicChatFailure {
+  const details =
+    typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : {};
+  const status = details.statusCode ?? details.status;
+  if (timedOut || details.name === 'APIConnectionTimeoutError' || details.name === 'TimeoutError') {
     return { error: '请求超时，请重试', code: 'upstream_timeout', status: 504 };
   }
   if (error instanceof ChatError) {
     return { error: error.message, code: error.code, status: error.status };
   }
-  if (error?.status === 401) {
+  if (status === 401) {
     return { error: '上游服务认证失败', code: 'upstream_auth', status: 502 };
   }
-  if (error?.status === 429) {
+  if (status === 429) {
     return { error: '请求过于频繁，请稍后再试', code: 'upstream_rate_limit', status: 429 };
   }
   return { error: '上游服务暂时不可用，请重试', code: 'upstream_unavailable', status: 502 };
 }
 
 // Also covers a stream that stalls after sending HTTP headers.
-export function createRequestScope(parentSignal, timeoutMs = 50_000) {
+export function createRequestScope(parentSignal: AbortSignal, timeoutMs = 50_000): RequestScope {
   const controller = new AbortController();
   let timedOut = false;
   const abort = () => controller.abort();
@@ -74,4 +79,16 @@ export function createRequestScope(parentSignal, timeoutMs = 50_000) {
       parentSignal.removeEventListener('abort', abort);
     },
   };
+}
+
+export interface PublicChatFailure {
+  error: string;
+  code: string;
+  status: number;
+}
+export interface RequestScope {
+  signal: AbortSignal;
+  readonly timedOut: boolean;
+  abort(): void;
+  dispose(): void;
 }

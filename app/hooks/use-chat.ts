@@ -6,14 +6,24 @@ import {
   localDemoReply,
   MAX_INPUT_CHARS,
   waitForDemo,
-} from '../../lib/chat-client.mjs';
-import { chatReducer, initialChatState } from '../../lib/chat-state.mjs';
-import { readChatResponse } from '../../lib/chat-transport.mjs';
+} from '../../lib/chat-client.ts';
+import { chatReducer, initialChatState } from '../../lib/chat-state.ts';
+import { ChatResponseError } from '../../lib/chat-transport.ts';
+import { sendUIChat } from '../../lib/chat-ui-transport.ts';
+import type { ChatMode } from '../../lib/chat-contract.ts';
 
-export function useChat({ mode, accessToken, ready }) {
+export function useChat({
+  mode,
+  accessToken,
+  ready,
+}: {
+  mode: ChatMode;
+  accessToken: string;
+  ready: boolean;
+}) {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const [input, setInput] = useState('');
-  const activeRequest = useRef(null);
+  const activeRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
 
   useEffect(
@@ -24,11 +34,15 @@ export function useChat({ mode, accessToken, ready }) {
     [],
   );
 
-  async function sendMessage(override) {
+  async function sendMessage(override?: string) {
     const text = (typeof override === 'string' ? override : input).trim();
     if (!text || text.length > MAX_INPUT_CHARS || activeRequest.current) return;
     if (mode === 'live' && (!accessToken.trim() || !ready)) return;
-    const history = buildConversation(state.messages, text);
+    const history = buildConversation(
+      state.messages,
+      text,
+      mode === 'live' ? 'ui-message' : 'legacy',
+    );
     const controller = new AbortController();
     activeRequest.current = controller;
     const id = ++generation.current;
@@ -45,17 +59,9 @@ export function useChat({ mode, accessToken, ready }) {
         await waitForDemo(controller.signal);
         content = localDemoReply(text);
       } else {
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${accessToken.trim()}`,
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-          },
-          body: JSON.stringify({ messages: history }),
-        });
-        content = await readChatResponse(response, {
+        content = await sendUIChat({
+          messages: history,
+          accessToken,
           signal: controller.signal,
           onDelta: (content) => {
             if (id === generation.current) dispatch({ type: 'delta', id, content });
@@ -71,8 +77,16 @@ export function useChat({ mode, accessToken, ready }) {
           : '已取消本次请求。'
         : error instanceof TypeError
           ? '网络连接失败，请检查连接后重试。'
-          : error.message;
-      dispatch({ type: 'fail', id, error: message, text, requestId: error.requestId });
+          : error instanceof Error
+            ? error.message
+            : '请求失败，请重试。';
+      dispatch({
+        type: 'fail',
+        id,
+        error: message,
+        text,
+        requestId: error instanceof ChatResponseError ? error.requestId : undefined,
+      });
     } finally {
       clearTimeout(timeout);
       if (id === generation.current) activeRequest.current = null;

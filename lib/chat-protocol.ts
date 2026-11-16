@@ -2,6 +2,6 @@
 export const MAX_REPLY_CHARS = 32_000;
 export const MAX_EVENT_CHARS = 256 * 1024;
 
-export function encodeChatEvent(event, data) {
+export function encodeChatEvent(event: string, data: unknown) {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }

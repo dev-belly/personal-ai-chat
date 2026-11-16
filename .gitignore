@@ -9,3 +9,6 @@ node_modules/
 *.log
 start-dev.bat
 test-results/
+
+next-env.d.ts
+*.tsbuildinfo

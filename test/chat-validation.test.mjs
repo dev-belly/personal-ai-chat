@@ -9,7 +9,7 @@ import {
   readJsonBody,
   RequestBodyError,
   validateMessages,
-} from "../lib/chat-validation.mjs";
+} from "../lib/chat-validation.ts";
 
 test("access-token configuration requires a strong, unpadded secret", () => {
   assert.equal(isValidAccessTokenConfiguration("x".repeat(32)), true);

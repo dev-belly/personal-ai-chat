@@ -1,90 +1,96 @@
-# 架构决策：模块化 BFF 与流式聊天
+# 架构决策：类型契约与标准 AI 消息流
 
-Personal AI Chat 使用 **Next.js App Router + React + 模块化 BFF（Backend for Frontend）**。
-同一个应用提供页面与模型代理接口，浏览器通过 Fetch / Web Streams 接收 SSE；
-供应商 SDK、访问控制和响应策略有各自的边界。此轮升级沿用锁文件中的依赖，没有新增运行时依赖。
+当前技术版本按 **2026-11-16** 的正式发布版本核对：Next.js 16.4.6、React 19.3.1、
+TypeScript 7.0.2、AI SDK 7.0.173、Zod 4.6.7。精确版本由 `package-lock.json` 固定。
 
-## 请求经过哪些边界
+## 可运行的请求链路
 
 ```mermaid
 flowchart TD
-  UI["React 页面与 useChat"] -->|"POST /api/chat"| HTTP["Route Handler 与 HTTP 编排"]
-  HTTP --> Policy["输入校验与回复策略"]
-  HTTP --> Adapter["Anthropic 供应商适配器"]
-  Adapter --> Model["部署者配置的模型 API"]
+  Page["Server Component 页面"] --> Client["React 客户端与会话状态"]
+  Client -->|"UIMessage Stream v1"| API["Next.js BFF 与鉴权"]
+  API --> Schema["Zod 输入契约与回复策略"]
+  API --> Core["AI SDK 7 模型层"]
+  Core --> Anthropic["Anthropic 协议"]
+  Core --> Compatible["OpenAI 兼容协议"]
 ```
 
-HTTP 层把适配器输出的文本交给回复策略检查，再编码为浏览器协议。
-模型供应商的原始事件不会直接穿透到前端；纯工具块和思考块也不会作为回答显示。
+浏览器通过 AI SDK 的 `DefaultChatTransport` 和 `readUIMessageStream` 处理标准消息流。
+供应商响应由 AI SDK 归一化成文本事件，经过应用的空回复、长度与完整性策略后，才编码给浏览器。
+原有 `/api/chat` JSON 与具名 SSE 继续可用，新浏览器路径为 `/api/chat/ui`。
 
-| 文件 | 负责什么 | 依赖边界 |
-| --- | --- | --- |
-| `app/page.js` | 模式、访问口令、消息和操作按钮的显示 | 不包含模型调用与流解析 |
-| `app/hooks/use-chat.js` | 发送、取消、超时、清空与请求代次 | 调用浏览器传输层与状态 reducer |
-| `lib/chat-state.mjs` | 待发送、流入、完成、失败、未完成状态 | 纯函数；旧请求动作不能影响新会话 |
-| `lib/chat-client.mjs` | 完整轮次选择、UTF-8 请求预算、本地演示 | 只把成功轮次放入下一次上下文 |
-| `lib/chat-transport.mjs` | Fetch 响应、增量 UTF-8 解码、SSE 帧与完成确认 | 不识别供应商事件 |
-| `lib/chat-protocol.mjs` | SSE 编码与回复、数据帧上限 | 浏览器和服务端都可导入；不含密钥 |
-| `app/api/chat/route.js` | Next.js GET / POST 入口 | 将 POST 交给独立 HTTP handler |
-| `lib/server/chat-handler.mjs` | 配置、鉴权、请求编号、JSON/SSE 协商和资源清理 | 按请求读取环境变量；可注入供应商用于测试 |
-| `lib/chat-validation.mjs` | 请求体、消息角色、字符数和令牌比较 | 仅服务端使用 |
-| `lib/server/chat-service.mjs` | 回复上限、空文本、公开错误、整个回复生命周期的截止时间 | 与供应商 SDK 无关 |
-| `lib/server/anthropic-provider.mjs` | SDK 调用及供应商事件到文本的转换 | 仅服务端持有 API Key |
+| 文件 | 负责什么 |
+| --- | --- |
+| `app/page.tsx`、`app/layout.tsx` | Server Component 页面边界、文档元数据和全局样式 |
+| `app/components/chat-app.tsx` | 模式、访问口令和消息展示；浏览器存储留在客户端 |
+| `app/hooks/use-chat.ts`、`lib/chat-state.ts` | 请求代次、取消、完成/失败状态与清空隔离 |
+| `lib/chat-contract.ts` | Zod Schema、推导类型、文本/标准 UI 消息转换与共同上限 |
+| `lib/chat-client.ts` | 完整轮次裁剪；按实际 UI 信封计算 UTF-8 字节预算 |
+| `lib/chat-ui-transport.ts` | 官方 AI SDK 传输/读取器；验证请求元数据、完成事件和帧预算 |
+| `lib/chat-transport.ts`、`lib/chat-protocol.ts` | 兼容旧 JSON / 具名 SSE 的读取与编码 |
+| `app/api/chat/route.ts`、`app/api/chat/ui/route.ts` | 动态配置状态、兼容接口与标准消息流接口 |
+| `lib/server/chat-handler.ts` | 同一套鉴权、输入校验、请求编号、回复策略及两种流编码 |
+| `lib/chat-validation.ts`、`lib/server/chat-service.ts` | 实际读取字节限制、令牌比较、回复上限、公开错误与截止时间 |
+| `lib/server/model-provider.ts` | 显式模型实例；配置解析、两种供应商适配、AI SDK generateText / streamText |
 
-## 为什么保留一个部署单元
+## 类型约束进入运行与 CI
 
-当前产品是单用户、页面内存会话，业务复杂度集中在模型代理与流式交互。
-模块化 BFF 让前端和接口同源部署，且可以独立测试供应商边界。服务端不依赖进程内会话表，
-也不把聊天记录写到本地文件，适合现有 OpenNext / Workers 部署方式。
+生产页面、Hook、协议和服务端源码均为 TypeScript。`strict`、`noUncheckedIndexedAccess`、
+`erasableSyntaxOnly` 开启，`allowJs` 关闭；CI 在构建前独立执行 `npm run typecheck`。
+Node.js 22.18+ 可直接执行可擦除的 `.ts` 模块，测试和 Next.js 构建使用相同源码。
 
-后续如需账号、跨设备会话或共享用量配额，应先定义数据模型与鉴权，再增加持久化服务。
-更换供应商时实现 `complete(messages, { signal })` 和 `stream(messages, { signal })` 即可；
-流接口返回文本异步迭代器，完整结束才允许返回，异常断流必须抛错。
-目前只实现了 Anthropic 兼容适配器，未宣称支持其他供应商或多用户服务。
+共享 Zod Schema 同时产生 TypeScript 类型并验证实际输入。标准 UI 接口仅接受 user / assistant
+文本 parts；system、工具、文件和额外可执行字段不能被静默提升为模型上下文。
+UI 信封的 ID、parts 和转义开销也计入 64 KiB 请求预算。
 
-## 完整回复是一个明确状态
+React Compiler 通过 `next.config.ts` 开启，参与实际生产与 Workers 构建。
+Server Component 外壳与客户端交互组件分别维护；浏览器存储和请求生命周期均留在客户端。
+性能变化尚未进行基准测量。
 
-浏览器发送 `Accept: text/event-stream` 启用流；省略该请求头时保留原有 `{ content }` JSON 返回。
-协议是 `start` → 零个或多个 `text-delta` → `done`，失败以 `error` 结束。
-详见 [接口协议](API.zh-CN.md)。
+## 模型层显式选择供应商
 
-收到文本只更新“正在回复”。服务端必须看到供应商的 `message_stop`，并确认文本非空且不超过
-32,000 字符，才发送 `done`；浏览器也必须收到 `done` 才提交成功轮次。
-普通连接结束、取消或错误均不能提交半截回答。页面保留部分文字并标注“未完成回复”，供用户查看和重试。
+`CHAT_PROVIDER` 仅由部署环境设置，支持 `anthropic` 和 `openai-compatible`。
+默认保留原来的 `CLAUDE_MODEL` / `ANTHROPIC_*` 配置；Anthropic 基址统一为带 `/v1` 的地址，
+已经包含 `/v1` 时不重复追加。OpenAI 兼容服务填写实际 Chat Completions API 基址及模型 ID。
 
-纯函数 reducer 再校验请求代次；新建会话、切换模式或卸载会使旧代次失效。
-即使旧请求的回调较晚到达，也无法把内容写进新的会话。
+两种适配器通过 AI SDK 7 的同一接口生成文本。使用 provider 实例，避免裸模型字符串自动走 AI Gateway。
+浏览器不能选择密钥、上游地址或模型。HTTP 请求重试和流内重试都设为零，失败由用户显式重试。
+第三方兼容网关的模型能力仍需在对应服务核对；本项目没有宣称所有网关完全兼容。
 
-## 截止时间、取消与背压
+## 完成、取消与资源生命周期
 
-- 服务端请求使用 50 秒截止时间，包含收到上游响应头之后的流式读取；浏览器等待上限为 60 秒。
-- 请求断开和响应体取消都会触发同一个 AbortController，取消 SDK 读取。取消后是否继续计费由实际供应商决定。
-- 响应体通过 `ReadableStream.pull()` 按需读取下一段，避免先把完整答案积累后才发送。
-- 流完成、失败或取消都会清理定时器和父信号监听；SDK 迭代器结束时关闭上游流。
-- 服务端与浏览器都限制回复为 32,000 字符；浏览器还限制单个 SSE 帧，防止无限积累异常输入。
+标准协议是 `start`、`text-start`、`text-delta`、`text-end`、`finish`；尾部 `[DONE]` 是 SSE
+传输终止标记。应用必须收到有效 `finish` 且文本非空，才把本轮标为成功；仅有 `[DONE]` 或 EOF 不足以提交。
+上游 SDK 报告 `interrupted`、错误或缺失终止原因时，半截文字仍以“未完成回复”留在页面。
+旧协议的成功标记为 `done`，两种编码共享同一回复策略。
 
-## 观测与验证
+服务端先读取到上游首个文本或终止事件，再建立流，以便在开流前保留上游 401 / 429 对应的公开 HTTP 状态。
+响应按 `ReadableStream.pull()` 读取经过校验的下一段。取消不创建后台消费副本，直接通过信号和迭代器清理传播到模型连接。
 
-每次 POST 生成独立的 `X-Request-ID`。上游失败日志只保留请求编号、公开错误码和状态；
-不会记录提示词、回复、令牌或 SDK 错误体。页面错误可显示请求编号，便于部署者对照日志。
+- 服务端截止时间为 50 秒，覆盖请求体读取和上游流式回复；浏览器等待上限为 60 秒。
+- 服务端与浏览器均限制回复为 32,000 字符；标准流的单帧字节在 SDK 解析前受限。
+- 完成、失败、取消均释放定时器和父信号监听；模型迭代器退出时中止剩余读取。
+- 页面纯函数 reducer 和递增请求代次同时隔离旧回调，新会话不会接收旧文字。
+- 取消传播到实际供应商后是否停止计费，仍由供应商决定。
 
-`npm test` 验证字节切分、中文/emoji、CRLF、无完成事件、截止时间、取消、回复限制和旧请求隔离。
-`npm run check:http` 则经过真正的生产 Next.js 服务和 SDK，使用回环地址上的模型替身：
-替身先发送一段文字，直到检查明确放行才发送结尾；因此可以验证实际增量传输，且不依赖性能时间阈值。
-另一项检查取消正在读取的 HTTP 响应，等待替身连接关闭，从而验证上游取消传播。
+## 验证与当前边界
 
-`npm run check:browser` 使用 Playwright / Chromium，经由生产服务验证页面增量显示、取消重试、
-未完成回复、请求编号、清空后的新会话及 390px 手机布局。此项需要可启动浏览器的环境，
-CI 会安装匹配的 Chromium，并保存使用合成会话的桌面和手机截图。
+`npm test` 覆盖标准/兼容消息流、错误、终止、取消、Schema、上下文预算和会话状态。
+`npm run check:http` 的 33 项检查经过生产 Next.js、AI SDK 和回环地址的模型替身；
+Anthropic、OpenAI 兼容两种协议分别验证鉴权和连接关闭。首段文字必须在检查放行上游结尾前到达，
+避免把一次性完整输出误当成增量流。
 
-Node.js 和 Workers 构建都在 CI 中执行。线上 Workers 的代理缓冲、真实模型行为及计费，
-仍需在部署环境验证；本地模型替身通过不等同于生产环境验收。
+`npm run check:browser` 用 Chromium 验证标准协议的实际页面交互、取消重试、未完成回复、
+清空后立即发送和 390px 手机布局。Node.js 和 Workers 构建、依赖审计同样进入 CI。
+请求失败日志只保存请求编号、公开错误码和状态，不保存提示词、回复、密钥或 SDK 错误体。
 
-## 对照官方资料
+当前是单用户、页面内存会话。多用户账号、持久化、工具执行、RAG 和跨请求续传尚未实现。
+真实模型与线上 Workers 的运行行为需在实际部署环境验收，本地替身检查不等于生产模型验收。
 
-- [Next.js：Backend for Frontend](https://nextjs.org/docs/app/guides/backend-for-frontend)
-- [Next.js：Route Handlers 与 Web Streams](https://nextjs.org/docs/app/api-reference/file-conventions/route#streaming)
-- [Anthropic：流式消息与终止事件](https://platform.claude.com/docs/en/build-with-claude/streaming)
-- [Anthropic TypeScript SDK：流式调用与取消](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/typescript)
+## 官方资料
 
-本项目使用锁文件中的 SDK API；官方文档可能继续更新，升级依赖时应重新执行两种构建和 HTTP 检查。
+- [Next.js 16.4 与 React 19.3](https://nextjs.org/blog/next-16-4)
+- [React Compiler 配置](https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler)
+- [AI SDK 7](https://ai-sdk.dev/docs/introduction)
+- [标准传输](https://ai-sdk.dev/docs/ai-sdk-ui/transport)与[UIMessage 读取器](https://ai-sdk.dev/docs/ai-sdk-ui/reading-ui-message-streams)
+- [Anthropic provider](https://ai-sdk.dev/providers/ai-sdk-providers/anthropic)与[OpenAI 兼容 provider](https://ai-sdk.dev/providers/openai-compatible-providers)

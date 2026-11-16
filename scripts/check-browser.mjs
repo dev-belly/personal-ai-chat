@@ -13,6 +13,19 @@ const require = createRequire(`${root}/package.json`);
 const { chromium } = require('playwright');
 const token = 'browser-fixture-only-'.repeat(3);
 const calls = [];
+function normalizedMessages(messages) {
+  return messages.map(({ role, content }) => ({
+    role,
+    content:
+      typeof content === 'string'
+        ? content
+        : content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join(''),
+  }));
+}
+
 let held;
 let mode = 'held';
 const upstream = createServer(async (req, res) => {
@@ -170,7 +183,7 @@ try {
   await page.getByRole('button', { name: '重试这条消息' }).click();
   await page.getByText('完整新回复', { exact: true }).waitFor();
   assert.deepEqual(
-    calls.at(-1).messages.map((item) => item.content),
+    normalizedMessages(calls.at(-1).messages).map((item) => item.content),
     ['incremental', '第一段第二段🙂', 'cancel-check'],
   );
   console.log('PASS cancellation, partial label, retry and clean history');
@@ -192,7 +205,9 @@ try {
   await page.getByText('完整新回复', { exact: true }).waitFor();
   old.release();
   await within(old.closed);
-  assert.deepEqual(calls.at(-1).messages, [{ role: 'user', content: 'new-session' }]);
+  assert.deepEqual(normalizedMessages(calls.at(-1).messages), [
+    { role: 'user', content: 'new-session' },
+  ]);
   assert.doesNotMatch(await page.locator('main').innerText(), /第一段|old-session|未完成/);
   console.log('PASS clear during stream and immediate fresh session');
   await page.setViewportSize({ width: 390, height: 844 });

@@ -1,4 +1,4 @@
-import { createChatHandler, isChatConfigured } from '../../../lib/server/chat-handler.mjs';
+import { createChatHandler, isChatConfigured } from '../../../lib/server/chat-handler.ts';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -12,6 +12,6 @@ export async function GET() {
   );
 }
 
-export async function POST(request) {
+export async function POST(request: Request): Promise<Response> {
   return handleChat(request);
 }

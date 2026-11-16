@@ -9,15 +9,17 @@ Personal AI Chat 将 Next.js / React 页面和模型代理路由放在同一仓�
 
 | 环节 | 实现 | 需要保持的行为 |
 | --- | --- | --- |
-| 输入与页面状态 | [app/page.js](../app/page.js)、[use-chat.js](../app/hooks/use-chat.js) 和 [chat-state.mjs](../lib/chat-state.mjs) | 中文输入法确认不误发送；等待、取消、失败重试与新会话有明确状态。 |
-| 历史上下文 | [lib/chat-client.mjs](../lib/chat-client.mjs) | 仅保留成功的完整轮次，删除最旧的整轮以满足消息数、字符数和序列化字节限制。 |
-| 配置与鉴权 | [chat-handler.mjs](../lib/server/chat-handler.mjs) | 浏览器使用独立访问口令；上游 API Key 只由服务端读取。 |
-| 请求体与角色契约 | [lib/chat-validation.mjs](../lib/chat-validation.mjs) | 累计实际读取字节；限制消息长度和总字符数；角色从 user 开始交替并以 user 结束。 |
-| 模型边界 | [anthropic-provider.mjs](../lib/server/anthropic-provider.mjs) 与 [chat-service.mjs](../lib/server/chat-service.mjs) | 透传请求取消信号，设置超时，不自动重试；将内部错误转成可重试的公开错误。 |
+| 输入与页面状态 | [app/components/chat-app.tsx](../app/components/chat-app.tsx)、[use-chat.ts](../app/hooks/use-chat.ts) 和 [chat-state.ts](../lib/chat-state.ts) | 中文输入法确认不误发送；等待、取消、失败重试与新会话有明确状态。 |
+| 历史上下文 | [lib/chat-client.ts](../lib/chat-client.ts) | 仅保留成功的完整轮次，删除最旧的整轮以满足消息数、字符数和序列化字节限制。 |
+| 配置与鉴权 | [chat-handler.ts](../lib/server/chat-handler.ts) | 浏览器使用独立访问口令；上游 API Key 只由服务端读取。 |
+| 请求体与角色契约 | [lib/chat-validation.ts](../lib/chat-validation.ts) | 累计实际读取字节；限制消息长度和总字符数；角色从 user 开始交替并以 user 结束。 |
+| 模型边界 | [model-provider.ts](../lib/server/model-provider.ts) 与 [chat-service.ts](../lib/server/chat-service.ts) | 透传请求取消信号，设置超时，不自动重试；将内部错误转成可重试的公开错误。 |
+
+生产源码均为 strict TypeScript，Zod Schema 同时定义运行时输入与推导类型；CI 先执行 `typecheck`。
 
 页面用递增的请求代次和纯函数 reducer 隔离会话。清空或切换模式会使旧标识失效，较晚返回的响应不能覆盖新会话。
 失败请求和未完成文本留在页面以供重试，但不进入下一次模型上下文。
-流式解析必须见到 `done` 才提交成功轮次；普通连接结束不能冒充完成。
+浏览器默认使用标准 UI 协议，必须见到 `finish` 才提交成功轮次；兼容 SSE 必须见到 `done`。普通连接结束不能冒充完成。
 聊天数据目前只保留在页面内，持久化与多用户会话管理尚未实现。
 
 ## JSON 模式 HTTP 返回契约
@@ -44,6 +46,7 @@ Personal AI Chat 将 Next.js / React 页面和模型代理路由放在同一仓�
 
 ```bash
 npm ci
+npm run typecheck
 npm test
 npm run build
 npm run check:http
@@ -51,7 +54,7 @@ npm run build:worker
 ```
 
 `npm test` 检查上下文裁剪、UTF-8 字节预算、输入法和请求校验等可独立行为。
-`check:http` 启动生产 Next.js 子进程与本地 HTTP 模型替身，检查以下 23 项：
+`check:http` 启动生产 Next.js 子进程与两种本地 HTTP 模型替身，检查以下 33 项：
 
 1. 配置状态不泄露配置值且不缓存。
 2. 错误口令被拦截，上游调用数保持为零。
@@ -75,7 +78,17 @@ npm run build:worker
 20. SSE 建立前的上游认证错误保留 502 且不自动重试。
 21. SSE 建立前的上游限流保留 429 且不自动重试。
 22. 客户端取消后，上游替身的真实 HTTP 连接关闭。
-23. 未配置的应用返回 503 且不调用上游。
+23. 官方 UI 传输器经生产 HTTP 增量读取标准文本消息。
+24. UI 鉴权和不支持的消息 parts 在调用模型前拦截。
+25. UI 缺少完成事件不能保存为成功轮次。
+26. UI 流内错误不能保存为成功轮次。
+27. UI 空回复不能保存为成功轮次。
+28. UI 取消关闭 Anthropic 上游连接。
+29. OpenAI 兼容 JSON 路径使用指定基址和私有 Bearer 密钥。
+30. 同一个 UI 传输器可以读取 OpenAI 兼容服务。
+31. OpenAI 兼容服务的认证失败被公开转换且不重试。
+32. UI 取消也关闭 OpenAI 兼容上游连接。
+33. 未配置的应用返回 503 且不调用上游。
 
 替身监听 `127.0.0.1` 的随机端口，应用使用脚本生成的测试配置。
 脚本退出时停止子进程并关闭连接；不接触真实模型或现有部署。
