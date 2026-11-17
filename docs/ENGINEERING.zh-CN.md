@@ -10,6 +10,8 @@ Personal AI Chat 将 Next.js / React 页面和模型代理路由放在同一仓�
 | 环节 | 实现 | 需要保持的行为 |
 | --- | --- | --- |
 | 输入与页面状态 | [app/components/chat-app.tsx](../app/components/chat-app.tsx)、[use-chat.ts](../app/hooks/use-chat.ts) 和 [chat-state.ts](../lib/chat-state.ts) | 中文输入法确认不误发送；等待、取消、失败重试与新会话有明确状态。 |
+| 本机会话 | [conversation-store.ts](../lib/local/conversation-store.ts) 与 [use-conversation-history.ts](../app/hooks/use-conversation-history.ts) | 主动保存、刷新后打开、标题搜索、版本冲突、删除和导出；存储回调不影响新会话。 |
+| 回复展示 | [message-markdown.tsx](../app/components/message-markdown.tsx) | 流式 Markdown、表格、高亮代码复制；链接协议限制与外部图片替代文字。 |
 | 历史上下文 | [lib/chat-client.ts](../lib/chat-client.ts) | 仅保留成功的完整轮次，删除最旧的整轮以满足消息数、字符数和序列化字节限制。 |
 | 配置与鉴权 | [chat-handler.ts](../lib/server/chat-handler.ts) | 浏览器使用独立访问口令；上游 API Key 只由服务端读取。 |
 | 请求体与角色契约 | [lib/chat-validation.ts](../lib/chat-validation.ts) | 累计实际读取字节；限制消息长度和总字符数；角色从 user 开始交替并以 user 结束。 |
@@ -20,7 +22,8 @@ Personal AI Chat 将 Next.js / React 页面和模型代理路由放在同一仓�
 页面用递增的请求代次和纯函数 reducer 隔离会话。清空或切换模式会使旧标识失效，较晚返回的响应不能覆盖新会话。
 失败请求和未完成文本留在页面以供重试，但不进入下一次模型上下文。
 浏览器默认使用标准 UI 协议，必须见到 `finish` 才提交成功轮次；兼容 SSE 必须见到 `done`。普通连接结束不能冒充完成。
-聊天数据目前只保留在页面内，持久化与多用户会话管理尚未实现。
+聊天默认在页面内；用户点击保存后写入本浏览器的 IndexedDB。没有服务端会话库或跨设备同步。
+摘要和正文在同一 Dexie 事务内提交，更新/删除比较修订号。详见[本机会话设计](LOCAL_CONVERSATIONS.zh-CN.md)。
 
 ## JSON 模式 HTTP 返回契约
 
@@ -54,6 +57,10 @@ npm run build:worker
 ```
 
 `npm test` 检查上下文裁剪、UTF-8 字节预算、输入法和请求校验等可独立行为。
+[存储测试](../test/conversation-store.test.mjs)在 fake-indexeddb 中执行真实 Dexie 事务，
+包含写入失败回滚、同版本并发只有一个成功、旧修订拒绝覆盖/删除、已删除记录不复活、
+读写大小与数据校验，以及访问配置不进入保存字段。
+[恢复测试](../test/conversation-restore.test.mjs)验证旧请求动作与重用的请求编号不能改写恢复的记录。
 `check:http` 启动生产 Next.js 子进程与两种本地 HTTP 模型替身，检查以下 33 项：
 
 1. 配置状态不泄露配置值且不缓存。
@@ -101,4 +108,7 @@ npm run build:worker
 
 这些检查验证 Node.js 生产服务到本地模型边界的请求行为。
 `npm run check:browser` 另用 Chromium 检查实际页面的增量显示、取消重试、
-未完成回复、新会话与手机布局，CI 会安装浏览器并执行。Cloudflare 线上运行和真实模型响应需另行验收。
+未完成回复、新会话与手机布局。新增场景验证主动保存、刷新恢复、JSON 下载、跨标签页冲突与响应式删除、
+存储与新会话并发、打开历史时中止流、恢复后的真实上下文、Markdown 表格/高亮/复制、
+脚本/危险链接/追踪图片边界，以及存储不可用时聊天仍可使用。
+CI 会安装浏览器并执行，保留合成会话的桌面和手机截图。Cloudflare 线上运行和真实模型响应需另行验收。

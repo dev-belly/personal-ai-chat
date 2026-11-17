@@ -1,9 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { MAX_INPUT_CHARS, shouldSubmit } from '../../lib/chat-client.ts';
 import { useChat } from '../hooks/use-chat';
 import type { ChatMode } from '../../lib/chat-contract.ts';
+import ConversationHistory from './conversation-history';
+import { useConversationHistory } from '../hooks/use-conversation-history';
+
+const MessageMarkdown = dynamic(() => import('./message-markdown'), { ssr: false });
 
 export default function ChatApp() {
   const [mode, setMode] = useState<ChatMode>('demo');
@@ -13,11 +18,16 @@ export default function ChatApp() {
   );
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [storageWarning, setStorageWarning] = useState(false);
-  const { messages, loading, input, setInput, sendMessage, clearChat, cancelRequest } = useChat({
+  const { messages, loading, input, setInput, sendMessage, clearChat, restoreConversation, cancelRequest } = useChat({
     mode,
     accessToken,
     ready: service === 'ready',
   });
+  const history = useConversationHistory({ mode, messages,
+    restore: (saved) => { restoreConversation(saved.messages); setMode(saved.mode); },
+    clear: clearChat,
+  });
+  function newConversation() { history.resetSelection(); clearChat(); }
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -70,11 +80,12 @@ export default function ChatApp() {
       <header className="header">
         <h1>Personal AI Chat</h1>
         <div className="header-actions">
+          <button className="clear-btn" aria-expanded={history.open} onClick={() => history.setOpen(!history.open)}>会话历史</button>
           <select
             aria-label="聊天模式"
             value={mode}
             onChange={(event) => {
-              clearChat();
+              newConversation();
               setMode(event.target.value === 'live' ? 'live' : 'demo');
             }}
           >
@@ -94,7 +105,7 @@ export default function ChatApp() {
             />
           )}
           {messages.length > 0 && (
-            <button className="clear-btn" onClick={clearChat}>
+            <button className="clear-btn" onClick={newConversation}>
               新建会话
             </button>
           )}
@@ -117,6 +128,17 @@ export default function ChatApp() {
         )}
         {storageWarning && <p>浏览器禁止会话存储，访问口令仅保留在当前页面内。</p>}
       </div>
+      <ConversationHistory history={history} />
+      {messages.length > 0 && <div className="conversation-actions">
+        <button className="clear-btn" disabled={loading || history.busy} onClick={history.save}>
+          {history.selected ? '更新保存' : '保存会话'}
+        </button>
+        <button className="clear-btn" disabled={loading || history.busy} onClick={history.download}>导出会话</button>
+        <span>仅在点击保存后保留到本浏览器</span>
+      </div>}
+      {(history.notice || history.error || history.busy) && <div className="history-status" role="status">
+        {history.busy ? '正在处理会话…' : history.error || history.notice}
+      </div>}
       <main className="chat-container" aria-live="polite" aria-busy={loading}>
         {messages.length === 0 ? (
           <div className="empty-state">
@@ -146,9 +168,8 @@ export default function ChatApp() {
                   {message.status === 'incomplete' && ' · 未完成回复'}
                 </div>
                 <div className="message-text">
-                  {message.content.split('\n').map((line, lineIndex) => (
-                    <p key={lineIndex}>{line || '\u00A0'}</p>
-                  ))}
+                  {message.role === 'assistant' ? <MessageMarkdown content={message.content} streaming={message.status === 'streaming'} />
+                    : message.content.split('\n').map((line, lineIndex) => <p key={lineIndex}>{line || '\u00A0'}</p>)}
                 </div>
                 {message.requestId && (
                   <small className="input-hint">请求编号：{message.requestId}</small>
@@ -156,7 +177,7 @@ export default function ChatApp() {
                 {message.retryText && index === messages.length - 1 && (
                   <button
                     className="clear-btn retry-btn"
-                    disabled={loading || !canSend}
+                    disabled={loading || history.busy || !canSend}
                     onClick={() => sendMessage(message.retryText)}
                   >
                     重试这条消息
@@ -188,7 +209,7 @@ export default function ChatApp() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (shouldSubmit(event)) {
+              if (!history.busy && shouldSubmit(event)) {
                 event.preventDefault();
                 sendMessage();
               }
@@ -196,7 +217,7 @@ export default function ChatApp() {
             placeholder="输入消息… Enter 发送，Shift+Enter 换行"
             rows={1}
             maxLength={MAX_INPUT_CHARS}
-            disabled={loading}
+            disabled={loading || history.busy}
           />
           {loading ? (
             <button className="clear-btn" onClick={cancelRequest}>
@@ -206,7 +227,7 @@ export default function ChatApp() {
             <button
               className="send-btn"
               onClick={() => sendMessage()}
-              disabled={!input.trim() || !canSend}
+              disabled={!input.trim() || history.busy || !canSend}
               aria-label="Send message"
             >
               ↑

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -50,7 +50,7 @@ const upstream = createServer(async (req, res) => {
   const text = (value) =>
     event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: value } });
   const current = mode;
-  if (current === 'held') {
+  if (current === 'held' || current === 'markdown') {
     let release;
     const gate = new Promise((resolve) => (release = resolve));
     let close;
@@ -60,10 +60,12 @@ const upstream = createServer(async (req, res) => {
       release();
       close();
     });
-    text('第一段');
+    text(current === 'markdown' ? '## 可运行示例\n\n| 能力 | 状态 |\n| --- | --- |\n| 流式渲染 | 运行中 |\n\n```typescript\nconst answer = ' : '第一段');
     await gate;
     if (res.destroyed) return;
-    text('第二段🙂');
+    text(current === 'markdown'
+      ? '42;\n```\n\n[官方文档](https://example.com/docs)\n\n![外部图片](https://tracker.invalid/pixel)\n\n<script>window.__unsafeMarkdown = true</script>\n\n<a href="javascript:window.__unsafeMarkdown=true">危险链接</a>'
+      : '第二段🙂');
   } else if (current === 'error') {
     text('这是一段未完成回答');
     event('error', { error: { type: 'overloaded_error', message: 'private fixture detail' } });
@@ -146,7 +148,7 @@ try {
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
   page.setDefaultTimeout(15_000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -219,6 +221,163 @@ try {
     true,
   );
   await page.screenshot({ path: `${screenshots}/stream-mobile.png`, animations: 'disabled' });
+  await page.getByRole('button', {name: '会话历史', exact: true}).click();
+  await page.getByText('尚未保存会话；聊天后点击“保存会话”。', {exact:true}).waitFor();
+  await page.getByRole('button', {name: '会话历史', exact: true}).click();
+  console.log('PASS history stays empty until the user explicitly saves');
+
+  await page.getByRole('button', {name:'保存会话',exact:true}).click();
+  await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  await page.reload();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'代码测试'}).click();
+  await page.getByText('【本地模拟 · 固定示例】',{exact:true}).waitFor();
+  await send('继续记录');
+  await page.getByRole('button',{name:'Send message',exact:true}).waitFor();
+  await page.getByRole('button',{name:'更新保存',exact:true}).click();
+  await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button',{name:'导出会话',exact:true}).click();
+  const download = await downloadEvent;
+  assert.match(download.suggestedFilename(), /^personal-ai-chat-demo-\d+\.json$/);
+  const exported = JSON.parse(await readFile(await download.path(),'utf8'));
+  assert.equal(exported.mode,'demo');
+  assert.equal(exported.messages.length,4);
+  assert.doesNotMatch(JSON.stringify(exported),new RegExp(token));
+  assert.equal(exported.messages.some(message=>'request' in message),false);
+  console.log('PASS explicit save, page reload, complete history restore and JSON export');
+
+  const second = await page.context().newPage();
+  second.on('pageerror', (error) => errors.push(error.message));
+  await second.goto(origin);
+  await second.getByRole('button',{name:'会话历史',exact:true}).click();
+  await second.locator('.history-open').filter({hasText:'代码测试'}).click();
+  await second.getByRole('textbox',{name:'消息内容'}).fill('来自第二个标签页');
+  await second.getByRole('button',{name:'Send message',exact:true}).click();
+  await second.getByRole('button',{name:'更新保存',exact:true}).waitFor();
+  await second.getByRole('button',{name:'更新保存',exact:true}).waitFor({state:'visible'});
+  await second.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  await second.getByRole('button',{name:'更新保存',exact:true}).click();
+  await second.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  await send('旧标签页的未保存修改');
+  await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  await page.getByRole('button',{name:'更新保存',exact:true}).click();
+  await page.getByText('这条会话已在其他页面更新，请重新打开后再保存。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'代码测试'}).click();
+  await page.getByText('来自第二个标签页',{exact:true}).waitFor();
+  assert.doesNotMatch(await page.locator('main').innerText(),/旧标签页的未保存修改/);
+  await second.getByRole('button',{name:'会话历史',exact:true}).click();
+  await second.locator('.history-open').filter({hasText:'代码测试'}).waitFor();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.getByRole('button',{name:'删除会话：代码测试',exact:true}).click();
+  await page.getByText('尚未保存会话；聊天后点击“保存会话”。',{exact:true}).waitFor();
+  await second.getByText('尚未保存会话；聊天后点击“保存会话”。',{exact:true}).waitFor();
+  await second.close();
+  console.log('PASS cross-tab revision conflict, reactive history and atomic deletion');
+
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await send('保存与新建隔离');
+  await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  await page.evaluate(()=>{
+    const buttons=Array.from(document.querySelectorAll('button'));
+    buttons.find(button=>button.textContent.trim()==='保存会话').click();
+    buttons.find(button=>button.textContent.trim()==='新建会话').click();
+  });
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'更新保存',exact:true}).count(),0);
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await send('新会话独立保存');
+  await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  await page.getByRole('button',{name:'保存会话',exact:true}).click();
+  await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.getByRole('searchbox',{name:'搜索会话标题'}).fill('保存与新建');
+  await page.waitForFunction(()=>document.querySelectorAll('.history-list li').length===1);
+  await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).waitFor();
+  await page.getByRole('searchbox',{name:'搜索会话标题'}).fill('');
+  await page.waitForFunction(()=>document.querySelectorAll('.history-list li').length===2);
+  await page.screenshot({path:`${screenshots}/history-mobile.png`,animations:'disabled'});
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  console.log('PASS save/new-session race isolation and title search');
+
+  await page.setViewportSize({width:1280,height:900});
+  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  await page.getByRole('combobox',{name:'聊天模式'}).selectOption('live');
+  await page.getByText('真实服务已配置。',{exact:false}).waitFor();
+  mode='held';
+  await send('在流式回复中打开历史');
+  await page.getByText('AI · 正在回复',{exact:true}).waitFor();
+  const switching=held;
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).click();
+  await page.getByText('保存与新建隔离',{exact:true}).waitFor();
+  await within(switching.closed);
+  assert.equal(await page.getByRole('combobox',{name:'聊天模式'}).inputValue(),'demo');
+  assert.doesNotMatch(await page.locator('main').innerText(),/在流式回复中打开历史|第一段/);
+  console.log('PASS opening stored history aborts and isolates the active model stream');
+
+  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  await page.getByRole('combobox',{name:'聊天模式'}).selectOption('live');
+  await page.getByText('真实服务已配置。',{exact:false}).waitFor();
+  mode='complete';
+  await send('保存真实会话');
+  await page.getByText('完整新回复',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'保存会话',exact:true}).click();
+  await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  await page.reload();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'保存真实会话'}).click();
+  await page.getByText('真实服务已配置。',{exact:false}).waitFor();
+  await send('恢复后继续');
+  await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  assert.deepEqual(normalizedMessages(calls.at(-1).messages).map(message=>message.content),['保存真实会话','完整新回复','恢复后继续']);
+  console.log('PASS restored live conversation forwards only successful saved turns');
+
+  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  mode='markdown';
+  const tracking=[];
+  page.on('request',request=>{if(request.url().includes('tracker.invalid'))tracking.push(request.url());});
+  await page.route('**/tracker.invalid/**',route=>route.abort());
+  await send('展示 Markdown');
+  await page.getByRole('heading',{name:'可运行示例',exact:true}).waitFor();
+  await page.getByRole('table').waitFor();
+  await page.locator('pre code').filter({hasText:'const answer'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'复制代码',exact:true}).isDisabled(),true);
+  await page.screenshot({path:`${screenshots}/markdown-streaming.png`,animations:'disabled'});
+  held.release();
+  await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
+  await page.getByRole('button',{name:'复制代码',exact:true}).click();
+  await page.locator('output').filter({hasText:'已复制'}).waitFor({state:'attached'});
+  assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).trim(),'const answer = 42;');
+  await page.waitForFunction(()=>document.querySelectorAll('pre code span[style]').length>0);
+  assert.equal(await page.locator('.assistant-markdown img').count(),0);
+  assert.equal(await page.locator('.assistant-markdown a[href^="javascript:"]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__unsafeMarkdown),undefined);
+  assert.deepEqual(tracking,[]);
+  const safeLink=page.getByRole('link',{name:'官方文档',exact:true});
+  assert.match(await safeLink.getAttribute('rel'),/noopener/);
+  await page.screenshot({path:`${screenshots}/markdown-desktop.png`,animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:`${screenshots}/markdown-mobile.png`,animations:'disabled'});
+  console.log('PASS streamed Markdown tables, highlighted code copy, safe links and blocked tracking images');
+
+  const unavailable=await page.context().newPage();
+  unavailable.on('pageerror', (error) => errors.push(error.message));
+  await unavailable.addInitScript(()=>Object.defineProperty(window,'indexedDB',{value:undefined}));
+  await unavailable.goto(origin);
+  await unavailable.getByRole('textbox',{name:'消息内容'}).fill('无存储仍可聊天');
+  await unavailable.getByRole('button',{name:'Send message',exact:true}).click();
+  await unavailable.getByText('【本地模拟 · 固定示例】',{exact:true}).waitFor();
+  await unavailable.getByRole('button',{name:'保存会话',exact:true}).click();
+  await unavailable.getByText('浏览器未开放本机保存，当前聊天仍可继续。',{exact:true}).waitFor();
+  await unavailable.getByRole('button',{name:'会话历史',exact:true}).click();
+  await unavailable.getByText('浏览器暂时无法读取本机会话，当前聊天仍可使用。',{exact:true}).waitFor();
+  await unavailable.close();
+  console.log('PASS storage-unavailable fallback keeps chat functional');
+
   assert.deepEqual(errors, []);
   console.log('PASS mobile layout, mode switch and no browser runtime errors');
 } catch (error) {

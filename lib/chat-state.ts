@@ -6,6 +6,7 @@ export interface ChatState {
 }
 export type ChatAction =
   | { type: 'clear' }
+  | { type: 'restore'; messages: DisplayMessage[] }
   | { type: 'begin'; id: number; text: string }
   | { type: 'delta' | 'complete'; id: number; content: string }
   | { type: 'fail'; id: number; error: string; text: string; requestId?: string };
@@ -15,6 +16,14 @@ export const initialChatState: ChatState = { messages: [], activeId: null };
 // Stale chunks, completions and errors cannot modify a new or cleared session.
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   if (action.type === 'clear') return initialChatState;
+  if (action.type === 'restore') return {
+    activeId: null,
+    messages: action.messages.map(({ request: _request, ...message }) => ({
+      ...message,
+      ...(message.status === 'pending' ? { status: 'failed' as const } : {}),
+      ...(message.status === 'streaming' ? { status: 'incomplete' as const } : {}),
+    })),
+  };
   if (action.type === 'begin') {
     if (state.activeId !== null) return state;
     return {
