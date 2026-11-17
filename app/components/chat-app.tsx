@@ -18,7 +18,7 @@ export default function ChatApp() {
   );
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [storageWarning, setStorageWarning] = useState(false);
-  const { messages, loading, input, setInput, sendMessage, clearChat, restoreConversation, cancelRequest } = useChat({
+  const { messages, loading, input, inputError, setInput, sendMessage, clearChat, restoreConversation, cancelRequest } = useChat({
     mode,
     accessToken,
     ready: service === 'ready',
@@ -202,6 +202,7 @@ export default function ChatApp() {
         )}
       </main>
       <footer className="input-area">
+        {inputError && <p className="input-hint" role="alert">{inputError}</p>}
         <div className="input-wrapper">
           <textarea
             ref={textareaRef}

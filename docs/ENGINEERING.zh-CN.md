@@ -49,6 +49,7 @@ Personal AI Chat 将 Next.js / React 页面和模型代理路由放在同一仓�
 
 ```bash
 npm ci
+npm run check:text
 npm run typecheck
 npm test
 npm run build
@@ -61,7 +62,7 @@ npm run build:worker
 包含写入失败回滚、同版本并发只有一个成功、旧修订拒绝覆盖/删除、已删除记录不复活、
 读写大小与数据校验，以及访问配置不进入保存字段。
 [恢复测试](../test/conversation-restore.test.mjs)验证旧请求动作与重用的请求编号不能改写恢复的记录。
-`check:http` 启动生产 Next.js 子进程与两种本地 HTTP 模型替身，检查以下 33 项：
+`check:http` 启动生产 Next.js 子进程与两种本地 HTTP 模型替身，检查以下 41 项（按行为分组）：
 
 1. 配置状态不泄露配置值且不缓存。
 2. 错误口令被拦截，上游调用数保持为零。
@@ -96,6 +97,14 @@ npm run build:worker
 31. OpenAI 兼容服务的认证失败被公开转换且不重试。
 32. UI 取消也关闭 OpenAI 兼容上游连接。
 33. 未配置的应用返回 503 且不调用上游。
+34. JSON 接口拦截非法 UTF-8 字节，不调用上游。
+35. JSON 接口拦截未配对 Unicode 代理项，不调用上游。
+36. UI 接口拦截非法 UTF-8 字节，不调用上游。
+37. UI 接口拦截未配对 Unicode 代理项，不调用上游。
+38. 旧 SSE 拼接上游不同事件中的 emoji 代理项，保持原文。
+39. 标准 UI 流拼接上游不同事件中的 emoji 代理项，保持原文。
+40. 旧 SSE 不把未完成的 Unicode 回复标为成功。
+41. 标准 UI 流不把未完成的 Unicode 回复标为成功。
 
 替身监听 `127.0.0.1` 的随机端口，应用使用脚本生成的测试配置。
 脚本退出时停止子进程并关闭连接；不接触真实模型或现有部署。
@@ -112,3 +121,7 @@ npm run build:worker
 存储与新会话并发、打开历史时中止流、恢复后的真实上下文、Markdown 表格/高亮/复制、
 脚本/危险链接/追踪图片边界，以及存储不可用时聊天仍可使用。
 CI 会安装浏览器并执行，保留合成会话的桌面和手机截图。Cloudflare 线上运行和真实模型响应需另行验收。
+
+文字检查和 Unicode 回归用例见[边界说明](TEXT_BOUNDARIES.zh-CN.md)及
+[测试源码](../test/text-boundaries.test.mjs)。浏览器另外验证长标题的 emoji、保存后原文恢复，
+以及不完整输入被提示、修正后恢复发送；这些行为使用生产页面和本地模型替身。

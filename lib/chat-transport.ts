@@ -1,5 +1,6 @@
 import { legacyReplySchema, publicErrorSchema } from './chat-contract.ts';
 import { MAX_EVENT_CHARS, MAX_REPLY_CHARS } from './chat-protocol.ts';
+import { UnicodeTextBuffer } from './text-boundaries.ts';
 
 export class ChatResponseError extends Error {
   readonly requestId: string | undefined;
@@ -63,6 +64,7 @@ export async function readChatResponse(
   let buffer = '';
   let content = '';
   let started = false;
+  const unicode = new UnicodeTextBuffer();
   const abort = () => {
     void reader.cancel().catch(() => {});
   };
@@ -88,15 +90,17 @@ export async function readChatResponse(
           requestId = data.requestId;
         } else if (item.event === 'text-delta') {
           if (!started || typeof data?.delta !== 'string') throw fail();
-          content += data.delta;
+          const complete = unicode.push(data.delta);
+          content += complete;
           if (content.length > MAX_REPLY_CHARS) throw fail('回复内容过长，请重试');
-          onDelta(content);
+          if (complete) onDelta(content);
         } else if (item.event === 'error') {
           throw fail(
             typeof data.error === 'string' ? data.error : undefined,
             typeof data.code === 'string' ? data.code : undefined,
           );
         } else if (item.event === 'done') {
+          unicode.finish();
           if (!started || !content.trim()) throw fail('上游服务未返回有效文本，请重试');
           return content;
         }

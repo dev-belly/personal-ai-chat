@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import type { UIMessage } from 'ai';
+import { isWellFormedText } from './text-boundaries.ts';
+
+export const unicodeTextSchema = z.string().refine(isWellFormedText, '消息包含不完整的 Unicode 字符');
 
 export const MAX_REQUEST_BYTES = 64 * 1024;
 export const MAX_MESSAGES = 40;
@@ -8,7 +11,7 @@ export const MAX_TOTAL_CHARS = 32_000;
 
 const textMessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  content: z.string().min(1, '消息内容必须是非空文本'),
+  content: unicodeTextSchema.min(1, '消息内容必须是非空文本'),
 });
 
 export const conversationSchema = z
@@ -62,7 +65,7 @@ export const uiRequestSchema = z.object({
             z
               .object({
                 type: z.literal('text'),
-                text: z.string(),
+                text: unicodeTextSchema,
                 state: z.enum(['streaming', 'done']).optional(),
               })
               .strict(),
@@ -111,13 +114,12 @@ export function validateChatPayload(payload: unknown, format: WireFormat): Valid
 }
 
 export const publicErrorSchema = z.object({
-  error: z.string().min(1).max(500),
+  error: unicodeTextSchema.min(1).max(500),
   code: z.string().optional(),
   requestId: z.string().optional(),
 });
 export const legacyReplySchema = z.object({
-  content: z
-    .string()
+  content: unicodeTextSchema
     .refine((text) => Boolean(text.trim()))
     .max(32_000),
 });

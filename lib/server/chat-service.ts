@@ -1,4 +1,5 @@
 import { MAX_REPLY_CHARS } from '../chat-protocol.ts';
+import { isWellFormedText, UnicodeTextBuffer } from '../text-boundaries.ts';
 
 export class ChatError extends Error {
   readonly code: string;
@@ -18,6 +19,7 @@ export function validateReply(content: unknown): string {
   if (content.length > MAX_REPLY_CHARS) {
     throw new ChatError('回复内容过长，请缩小问题范围后重试', 'reply_too_large');
   }
+  if (!isWellFormedText(content)) throw new ChatError('上游响应包含不完整的字符，请重试', 'invalid_reply');
   return content;
 }
 
@@ -26,15 +28,21 @@ export function validateReply(content: unknown): string {
 export async function* validateTextStream(source: AsyncIterable<unknown>): AsyncGenerator<string> {
   let length = 0;
   let hasText = false;
+  const unicode = new UnicodeTextBuffer();
   for await (const delta of source) {
     if (typeof delta !== 'string') throw new ChatError('上游响应格式异常，请重试', 'invalid_reply');
     length += delta.length;
     if (length > MAX_REPLY_CHARS) {
       throw new ChatError('回复内容过长，请缩小问题范围后重试', 'reply_too_large');
     }
-    hasText ||= Boolean(delta.trim());
-    if (delta) yield delta;
+    let complete: string;
+    try { complete = unicode.push(delta); }
+    catch { throw new ChatError('上游响应包含不完整的字符，请重试', 'invalid_reply'); }
+    hasText ||= Boolean(complete.trim());
+    if (complete) yield complete;
   }
+  try { unicode.finish(); }
+  catch { throw new ChatError('上游响应包含不完整的字符，请重试', 'invalid_reply'); }
   if (!hasText) throw new ChatError('上游服务未返回有效文本，请重试', 'empty_reply');
 }
 

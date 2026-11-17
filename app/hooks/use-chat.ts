@@ -23,6 +23,8 @@ export function useChat({
 }) {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const [input, setInput] = useState('');
+  const [inputError, setInputError] = useState('');
+  function updateInput(value: string) { setInputError(''); setInput(value); }
   const activeRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
 
@@ -38,16 +40,20 @@ export function useChat({
     const text = (typeof override === 'string' ? override : input).trim();
     if (!text || text.length > MAX_INPUT_CHARS || activeRequest.current) return;
     if (mode === 'live' && (!accessToken.trim() || !ready)) return;
-    const history = buildConversation(
-      state.messages,
-      text,
-      mode === 'live' ? 'ui-message' : 'legacy',
-    );
+    setInputError('');
+    let history;
+    try {
+      history = buildConversation(state.messages, text, mode === 'live' ? 'ui-message' : 'legacy');
+    } catch (error) {
+      setInputError(error instanceof Error ? error.message : '暂时无法发送，请检查输入。');
+      return;
+    }
     const controller = new AbortController();
     activeRequest.current = controller;
     const id = ++generation.current;
     dispatch({ type: 'begin', id, text });
     setInput('');
+    setInputError('');
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
@@ -99,6 +105,7 @@ export function useChat({
     activeRequest.current = null;
     dispatch({ type: 'clear' });
     setInput('');
+    setInputError('');
   }
 
   function restoreConversation(messages: DisplayMessage[]) {
@@ -107,13 +114,15 @@ export function useChat({
     activeRequest.current = null;
     dispatch({ type: 'restore', messages });
     setInput('');
+    setInputError('');
   }
 
   return {
     messages: state.messages,
     loading: state.activeId !== null,
     input,
-    setInput,
+    setInput: updateInput,
+    inputError,
     sendMessage,
     clearChat,
     restoreConversation,
