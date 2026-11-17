@@ -148,7 +148,8 @@ try {
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
