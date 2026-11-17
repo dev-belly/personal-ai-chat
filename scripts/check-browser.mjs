@@ -299,6 +299,10 @@ try {
   await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).waitFor();
   await page.getByRole('searchbox',{name:'搜索会话标题'}).fill('');
   await page.waitForFunction(()=>document.querySelectorAll('.history-list li').length===2);
+  assert.equal(await page.evaluate(()=>{
+    const bounds=document.querySelector('.input-wrapper').getBoundingClientRect();
+    return bounds.top>=0 && bounds.bottom<=window.innerHeight;
+  }),true,'history drawer must leave the composer within the mobile viewport');
   await page.screenshot({path:`${screenshots}/history-mobile.png`,animations:'disabled'});
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
   console.log('PASS save/new-session race isolation and title search');

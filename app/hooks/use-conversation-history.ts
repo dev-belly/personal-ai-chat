@@ -13,6 +13,11 @@ interface HistoryOptions {
   clear: () => void;
 }
 
+function storageIsUnavailable() {
+  if (typeof window === 'undefined') return false;
+  try { return !window.indexedDB; } catch { return true; }
+}
+
 export function useConversationHistory({ mode, messages, restore, clear }: HistoryOptions) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -22,11 +27,14 @@ export function useConversationHistory({ mode, messages, restore, clear }: Histo
   const [error, setError] = useState('');
   const epoch = useRef(0);
   const inFlight = useRef(false);
+  // Dexie liveQuery deliberately does not run its querier without IndexedDB.
+  const storageUnavailable = storageIsUnavailable();
   const result = useLiveQuery(async () => {
+    if (storageUnavailable) return { items: [] as ConversationSummary[], unavailable: true };
     if (!open) return { items: [] as ConversationSummary[], unavailable: false };
     try { return { items: await getConversationRepository().list(search), unavailable: false }; }
     catch { return { items: [] as ConversationSummary[], unavailable: true }; }
-  }, [open, search]);
+  }, [open, search, storageUnavailable]);
 
   useEffect(() => { setNotice(''); setError(''); }, [messages]);
   useEffect(() => () => { epoch.current += 1; }, []);
@@ -99,6 +107,6 @@ export function useConversationHistory({ mode, messages, restore, clear }: Histo
     }
   }
   return { open, setOpen, search, setSearch, selected, busy, notice, error,
-    items: result?.items ?? [], reading: result === undefined,
-    unavailable: result?.unavailable ?? false, save, load, remove, download, resetSelection };
+    items: result?.items ?? [], reading: result === undefined && !storageUnavailable,
+    unavailable: storageUnavailable || (result?.unavailable ?? false), save, load, remove, download, resetSelection };
 }
