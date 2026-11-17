@@ -11,7 +11,8 @@
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "test": "node --test",
     "check:http": "node scripts/check-http.mjs",
-    "check": "npm run typecheck && npm test && npm run build && npm run check:http && npm run build:worker",
+    "check:text": "node scripts/check-text.mjs",
+    "check": "npm run check:text && npm run typecheck && npm test && npm run build && npm run check:http && npm run build:worker",
     "start": "next start",
     "check:browser": "node scripts/check-browser.mjs",
     "typecheck": "tsc --noEmit"

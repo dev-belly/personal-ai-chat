@@ -12,7 +12,7 @@
 
 选择“真实服务”后，页面先检查部署是否完成配置；缺少配置时会明确显示原因并保持发送禁用。配置完成后输入独立访问口令，即可连接实际模型。请求失败可重试，取消/新建会话/切换模式不会把旧响应写进新会话；中文输入法确认文字时不会误发送。
 
-[架构与设计取舍](docs/ARCHITECTURE.zh-CN.md) · [本机会话与渲染](docs/LOCAL_CONVERSATIONS.zh-CN.md) · [JSON / SSE 接口协议](docs/API.zh-CN.md) · [工程实现与验证](docs/ENGINEERING.zh-CN.md)
+[架构与设计取舍](docs/ARCHITECTURE.zh-CN.md) · [本机会话与渲染](docs/LOCAL_CONVERSATIONS.zh-CN.md) · [文字与边界检查](docs/TEXT_BOUNDARIES.zh-CN.md) · [JSON / SSE 接口协议](docs/API.zh-CN.md) · [工程实现与验证](docs/ENGINEERING.zh-CN.md)
 
 源码将 Server Component 页面、交互组件、会话状态、标准消息流、HTTP 编排和模型适配器分开。Zod 4 Schema 同时约束运行时输入和 TypeScript 类型；React Compiler 已在生产构建中启用。
 
@@ -111,6 +111,7 @@ Windows 用户也可以运行 `./deploy-cloudflare.ps1`；脚本不会读取、�
 ## 验证
 
 ```bash
+npm run check:text
 npm run typecheck
 npm test
 npm run build
@@ -132,9 +133,10 @@ npm run check:browser
 并验证保存后刷新、继续上下文、导出、跨标签页冲突与删除、保存与新会话并发、存储不可用，以及 Markdown 代码复制与链接/图片边界。
 使用测试口令，不调用真实模型。Linux 如缺少系统库可使用 `npx playwright install --with-deps chromium`。
 
-`check:http` 使用已有生产构建，启动真实 Next.js 服务和回环地址上的模型替身，检查 33 项接口行为。
+`check:http` 使用已有生产构建，启动真实 Next.js 服务和回环地址上的模型替身，检查 41 项接口行为。
 它覆盖配置、口令、请求校验、中文消息、上游错误，以及 JSON / 旧 SSE / 标准 UI 消息流中的空内容、断流和超大回复；两种模型协议分别验证请求鉴权和取消传播。
 流式替身在检查放行前只发送第一段，验证完整答案结束前已有文本到达；取消检查等待上游连接真正关闭。
+两种接口都验证非法 UTF-8 / 未配对 Unicode 输入不会调用模型；两种消息流都验证 emoji 跨事件拼接与不完整字符失败。
 全程使用测试口令，不调用真实模型、不需要 `.env.local`，也不会发布网站。
 上游没有返回有效文本时，接口在开始流前返回 502，或在流内发送错误，页面保留失败与重试状态，不将占位文字写入后续模型上下文。
 

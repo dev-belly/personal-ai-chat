@@ -76,7 +76,9 @@ async function streamFixture(response, mode) {
     await gate;
     if (response.destroyed) return;
     text('第二段🙂');
-  } else if (mode === 'whitespace') text(' \n ');
+  } else if (mode === 'split-unicode') { text('中文\uD83D'); text('\uDE42'); }
+  else if (mode === 'invalid-unicode') text('前文\uD83D');
+  else if (mode === 'whitespace') text(' \n ');
   else if (mode === 'oversized') text('x'.repeat(32_001));
   else if (mode !== 'empty' && mode !== 'tool') text('来自本地流式测试的回复🙂');
   if (mode === 'stream-error') {
@@ -337,6 +339,18 @@ try {
       assert.equal(calls.length, 0);
     });
   }
+  for (const endpoint of ['/api/chat', '/api/chat/ui']) {
+    const payload = endpoint.endsWith('/ui')
+      ? { messages: [{ id: 'unicode-check', role: 'user', parts: [{ type: 'text', text: 'bad\uD83D' }] }] }
+      : { messages: [{ role: 'user', content: 'bad\uD83D' }] };
+    for (const [label, body] of [['invalid UTF-8', new Uint8Array([255])], ['unpaired Unicode', JSON.stringify(payload)]]) {
+      await check(`${endpoint} rejects ${label} before a model call`, async () => {
+        const response = await fetch(`${app.origin}${endpoint}`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body });
+        assert.equal(response.status, 400);
+        assert.equal(calls.length, 0);
+      });
+    }
+  }
   await check('a real HTTP request forwards normalized messages and returns text', async () => {
     const response = await post({ messages: [{ ...valid.messages[0], ignored: 'not forwarded' }] });
     assert.equal(response.status, 200);
@@ -346,6 +360,10 @@ try {
     assert.equal(calls[0].key, apiKey);
     assert.deepEqual(normalizedMessages(calls[0].body.messages), valid.messages);
     assert.equal(calls[0].body.model, 'local-fixture');
+  });
+  await check('legacy SSE preserves emoji split across provider text events', async () => {
+    upstreamMode = 'split-unicode';
+    assert.equal(await readChatResponse(await post(valid, accessToken, { stream: true })), '中文🙂');
   });
   for (const [mode, status] of [
     ['auth', 502],
@@ -424,7 +442,7 @@ try {
     assert.equal(await reading, '第一段第二段🙂');
     assert.equal(calls.length, before);
   });
-  for (const mode of ['empty', 'whitespace', 'tool', 'incomplete', 'stream-error', 'oversized']) {
+  for (const mode of ['empty', 'whitespace', 'tool', 'incomplete', 'stream-error', 'oversized', 'invalid-unicode']) {
     await check(`SSE ${mode} emits a sanitized error instead of completion`, async () => {
       upstreamMode = mode;
       const before = calls.length;
@@ -528,7 +546,11 @@ try {
       assert.equal(calls.length, before);
     },
   );
-  for (const mode of ['incomplete', 'stream-error', 'empty']) {
+  await check('standard UI stream preserves emoji split across provider text events', async () => {
+    upstreamMode = 'split-unicode';
+    assert.equal(await ui(), '中文🙂');
+  });
+  for (const mode of ['incomplete', 'stream-error', 'empty', 'invalid-unicode']) {
     await check(`UI ${mode} cannot become a completed turn`, async () => {
       upstreamMode = mode;
       const before = calls.length;

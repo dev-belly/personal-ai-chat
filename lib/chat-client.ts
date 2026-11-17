@@ -1,5 +1,6 @@
 import { toUIMessages } from './chat-contract.ts';
 import type { DisplayMessage, TextMessage, WireFormat } from './chat-contract.ts';
+import { isWellFormedText } from './text-boundaries.ts';
 export const MAX_INPUT_CHARS = 8_000;
 const MAX_REQUEST_BYTES = 64 * 1024;
 
@@ -20,6 +21,7 @@ export function buildConversation(
   if (typeof text !== 'string' || !text.trim() || text.length > MAX_INPUT_CHARS) {
     throw new Error('请输入 1—8,000 字符的消息');
   }
+  if (!isWellFormedText(text)) throw new Error('输入包含不完整的字符，请重新输入。');
   const complete: TextMessage[] = [];
   for (let i = 0; i < messages.length - 1; i += 1) {
     const user = messages[i];

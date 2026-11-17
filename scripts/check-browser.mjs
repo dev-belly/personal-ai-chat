@@ -71,7 +71,8 @@ const upstream = createServer(async (req, res) => {
     event('error', { error: { type: 'overloaded_error', message: 'private fixture detail' } });
     res.end();
     return;
-  } else text('完整新回复');
+  } else if (current === 'split-unicode') { text('中文\uD83D'); text('\uDE42'); }
+  else text('完整新回复');
   event('content_block_stop', { index: 0 });
   event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } });
   event('message_stop', {});
@@ -368,6 +369,38 @@ try {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
   await page.screenshot({path:`${screenshots}/markdown-mobile.png`,animations:'disabled'});
   console.log('PASS streamed Markdown tables, highlighted code copy, safe links and blocked tracking images');
+
+  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  mode='split-unicode';
+  const unicodePrompt='中'.repeat(79)+'🙂';
+  await send(unicodePrompt);
+  await page.getByText('中文🙂',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'保存会话',exact:true}).click();
+  await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
+  await page.reload();
+  await page.getByRole('button',{name:'会话历史',exact:true}).click();
+  await page.locator('.history-open').filter({hasText:'中'.repeat(79)}).click();
+  await page.getByText(unicodePrompt,{exact:true}).waitFor();
+  await page.getByText('中文🙂',{exact:true}).waitFor();
+  assert.equal(await page.locator('main').innerText().then(text=>text.includes(String.fromCharCode(0xfffd))),false);
+  console.log('PASS split emoji, title boundary and complete Unicode reload');
+
+  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  await page.getByText('真实服务已配置。',{exact:false}).waitFor();
+  const beforeInvalid=calls.length;
+  await input.evaluate(element=>{
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(element,'bad'+String.fromCharCode(0xd83d));
+    element.dispatchEvent(new Event('input',{bubbles:true}));
+  });
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'输入包含不完整的字符，请重新输入。'}).waitFor();
+  assert.equal(calls.length,beforeInvalid);
+  assert.equal(await page.locator('.message.user').count(),0);
+  mode='complete';
+  await send('修复输入后🙂');
+  await page.getByText('完整新回复',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('alert').filter({hasText:'输入包含不完整的字符，请重新输入。'}).count(),0);
+  console.log('PASS invalid input remains editable without a model call and recovers after correction');
 
   const unavailable=await page.context().newPage();
   unavailable.on('pageerror', (error) => errors.push(error.message));

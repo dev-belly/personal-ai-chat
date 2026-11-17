@@ -57,7 +57,7 @@ export async function readJsonBody(
   }
 
   const reader = request.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let totalBytes = 0;
   let text = '';
   const abort = () => {
@@ -80,6 +80,11 @@ export async function readJsonBody(
       text += decoder.decode(value, { stream: true });
     }
     text += decoder.decode();
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    signal?.throwIfAborted();
+    if (error instanceof TypeError) throw new RequestBodyError('请求不是有效的 UTF-8 文本', 400);
+    throw error;
   } finally {
     signal?.removeEventListener('abort', abort);
     reader.releaseLock();

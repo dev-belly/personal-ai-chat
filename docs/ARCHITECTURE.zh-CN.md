@@ -29,6 +29,7 @@ flowchart TD
 | `lib/local/conversation-store.ts` | IndexedDB 双表事务、Zod 读写验证、修订号、大小限制与导出 |
 | `app/components/message-markdown.tsx` | Streamdown 增量 Markdown、Shiki 代码块；链接协议与外部图片边界 |
 | `lib/chat-contract.ts` | Zod Schema、推导类型、文本/标准 UI 消息转换与共同上限 |
+| `lib/text-boundaries.ts` | Unicode 完整性、流式代理项缓冲与完整字素标题截断 |
 | `lib/chat-client.ts` | 完整轮次裁剪；按实际 UI 信封计算 UTF-8 字节预算 |
 | `lib/chat-ui-transport.ts` | 官方 AI SDK 传输/读取器；验证请求元数据、完成事件和帧预算 |
 | `lib/chat-transport.ts`、`lib/chat-protocol.ts` | 兼容旧 JSON / 具名 SSE 的读取与编码 |
@@ -99,7 +100,7 @@ Tailwind 4 只导入 theme / utilities，不引入 Preflight，原页面 reset �
 
 `npm test` 覆盖标准/兼容消息流、错误、终止、取消、Schema、上下文预算和会话状态，
 并用 fake-indexeddb 执行实际 Dexie 事务，验证回滚、修订冲突、并发与存储数据校验。
-`npm run check:http` 的 33 项检查经过生产 Next.js、AI SDK 和回环地址的模型替身；
+`npm run check:http` 的 41 项检查经过生产 Next.js、AI SDK 和回环地址的模型替身；
 Anthropic、OpenAI 兼容两种协议分别验证鉴权和连接关闭。首段文字必须在检查放行上游结尾前到达，
 避免把一次性完整输出误当成增量流。
 
@@ -107,6 +108,8 @@ Anthropic、OpenAI 兼容两种协议分别验证鉴权和连接关闭。首段�
 清空后立即发送、保存/刷新/跨标签页、Markdown 代码复制和 390px 手机布局。
 Node.js 和 Workers 构建、依赖审计同样进入 CI。
 请求失败日志只保存请求编号、公开错误码和状态，不保存提示词、回复、密钥或 SDK 错误体。
+`check:text` 扫描源码和文档的 UTF-8 字节与高置信乱码特征；请求、流式回复、标题与本机存储的
+Unicode 边界见[检查记录与设计](TEXT_BOUNDARIES.zh-CN.md)。
 
 当前是单用户应用，页面会话可主动保存到本浏览器。多用户账号、服务端会话库、
 跨设备同步、工具执行、RAG 和跨请求续传尚未实现。

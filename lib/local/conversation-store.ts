@@ -2,25 +2,27 @@ import { Dexie } from 'dexie';
 import type { EntityTable } from 'dexie';
 import { z } from 'zod';
 import type { ChatMode, DisplayMessage } from '../chat-contract.ts';
+import { unicodeTextSchema } from '../chat-contract.ts';
+import { conversationTitle } from '../text-boundaries.ts';
 
 export const MAX_SAVED_CONVERSATIONS = 100;
 export const MAX_SAVED_BYTES = 512 * 1024;
 const messageSchema = z.object({
   role: z.enum(['user', 'assistant', 'error']),
-  content: z.string().max(32_000),
+  content: unicodeTextSchema.max(32_000),
   status: z.enum(['sent', 'failed', 'incomplete']).optional(),
-  retryText: z.string().max(8_000).optional(),
+  retryText: unicodeTextSchema.max(8_000).optional(),
   requestId: z.string().max(128).optional(),
 }).strict().superRefine((message, context) => {
   const valid = message.role === 'user' ? ['sent', 'failed'].includes(message.status || '')
     : message.role === 'assistant' ? ['sent', 'incomplete'].includes(message.status || '') : message.status === undefined;
-  if (!valid || (message.status === 'sent' && !message.content.trim())) {
+  if (!valid || (message.status === 'sent' && !message.content.trim()) || (message.role === 'user' && message.content.length > 8_000)) {
     context.addIssue({ code: 'custom', message: '消息状态与角色不匹配' });
   }
 });
 const messagesSchema = z.array(messageSchema).min(1).max(400);
 const summarySchema = z.object({
-  id: z.string().uuid(), title: z.string().min(1).max(80), mode: z.enum(['demo', 'live']),
+  id: z.string().uuid(), title: unicodeTextSchema.min(1).max(80), mode: z.enum(['demo', 'live']),
   revision: z.number().int().positive(), createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(), messageCount: z.number().int().min(1).max(400),
 }).strict();
@@ -108,7 +110,7 @@ export function createConversationRepository(name?: string) {
           throw new ConversationStoreError('本机会话已满，请先删除不再需要的记录。');
         }
         const now = Date.now();
-        const title = messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) || '未命名会话';
+        const title = conversationTitle(messages.find((message) => message.role === 'user')?.content || '');
         const summary = summarySchema.parse({ id: existing?.id || crypto.randomUUID(), title,
           mode: input.mode, revision: (existing?.revision || 0) + 1, createdAt: existing?.createdAt ?? now,
           updatedAt: Math.max(now, existing?.updatedAt ?? 0), messageCount: messages.length });
@@ -136,6 +138,7 @@ export function getConversationRepository(): ConversationRepository {
 }
 
 export function exportConversation(mode: ChatMode, messages: DisplayMessage[]): string {
+  if (mode !== 'demo' && mode !== 'live') throw new ConversationStoreError('聊天模式不合法。');
   return JSON.stringify({ format: 'personal-ai-chat', version: 1, mode,
     exportedAt: new Date().toISOString(), messages: snapshotMessages(messages) }, null, 2);
 }

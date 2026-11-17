@@ -4,11 +4,13 @@ import { publicErrorSchema, requestMetadataSchema, toUIMessages } from './chat-c
 import type { ChatUIMessage, TextMessage } from './chat-contract.ts';
 import { MAX_EVENT_CHARS, MAX_REPLY_CHARS } from './chat-protocol.ts';
 import { ChatResponseError } from './chat-transport.ts';
+import { UnicodeTextBuffer } from './text-boundaries.ts';
 import type { ReadReplyOptions } from './chat-transport.ts';
 
 // Bound a malformed SSE frame before the SDK's parser accumulates it. Byte
 // framing is independent of split UTF-8 characters, which the SDK decodes.
 function boundedFrames(): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let bytes = 0;
   let previous = -1;
   let beforePrevious = -1;
@@ -22,8 +24,10 @@ function boundedFrames(): TransformStream<Uint8Array, Uint8Array> {
         beforePrevious = previous;
         previous = byte;
       }
+      decoder.decode(chunk, { stream: true });
       controller.enqueue(chunk);
     },
+    flush() { decoder.decode(); },
   });
 }
 
@@ -71,6 +75,7 @@ export async function sendUIChat({
   let finished = false;
   let totalChars = 0;
   let content = '';
+  const unicode = new UnicodeTextBuffer();
   const inspect = new TransformStream<UIMessageChunk, UIMessageChunk>({
     transform(chunk, controller) {
       signal?.throwIfAborted();
@@ -88,7 +93,13 @@ export async function sendUIChat({
         if (!started || finished) throw fail();
         totalChars += chunk.delta.length;
         if (totalChars > MAX_REPLY_CHARS) throw fail('回复内容过长，请重试');
+        const delta = unicode.push(chunk.delta);
+        if (delta) controller.enqueue({ ...chunk, delta });
+        return;
+      } else if (chunk.type === 'text-end') {
+        unicode.finish();
       } else if (chunk.type === 'finish') {
+        unicode.finish();
         if (
           !started ||
           finished ||
