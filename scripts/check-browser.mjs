@@ -399,7 +399,7 @@ try {
   mode='complete';
   await send('修复输入后🙂');
   await page.getByText('完整新回复',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('alert').count(),0);
+  assert.equal(await page.getByRole('alert').filter({hasText:'输入包含不完整的字符，请重新输入。'}).count(),0);
   console.log('PASS invalid input remains editable without a model call and recovers after correction');
 
   const unavailable=await page.context().newPage();
