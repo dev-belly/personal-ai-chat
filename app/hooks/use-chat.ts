@@ -10,7 +10,7 @@ import {
 import { chatReducer, initialChatState } from '../../lib/chat-state.ts';
 import { ChatResponseError } from '../../lib/chat-transport.ts';
 import { sendUIChat } from '../../lib/chat-ui-transport.ts';
-import type { ChatMode } from '../../lib/chat-contract.ts';
+import type { ChatMode, DisplayMessage } from '../../lib/chat-contract.ts';
 
 export function useChat({
   mode,
@@ -101,6 +101,14 @@ export function useChat({
     setInput('');
   }
 
+  function restoreConversation(messages: DisplayMessage[]) {
+    generation.current += 1;
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+    dispatch({ type: 'restore', messages });
+    setInput('');
+  }
+
   return {
     messages: state.messages,
     loading: state.activeId !== null,
@@ -108,6 +116,7 @@ export function useChat({
     setInput,
     sendMessage,
     clearChat,
+    restoreConversation,
     cancelRequest: () => activeRequest.current?.abort(),
   };
 }

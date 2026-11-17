@@ -19,19 +19,26 @@
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.105",
     "@ai-sdk/openai-compatible": "3.0.92",
+    "@streamdown/code": "2.0.0",
     "ai": "7.0.173",
+    "dexie": "4.4.7",
+    "dexie-react-hooks": "4.4.0",
     "next": "16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "streamdown": "2.7.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "1.20.4",
+    "@tailwindcss/postcss": "4.3.5",
     "@types/node": "22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "babel-plugin-react-compiler": "1.0.0",
+    "fake-indexeddb": "6.2.8",
     "playwright": "1.65.1",
+    "tailwindcss": "4.3.5",
     "typescript": "7.0.2",
     "wrangler": "4.149.0"
   },
