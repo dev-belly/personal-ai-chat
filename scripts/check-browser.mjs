@@ -156,15 +156,36 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(origin);
   const input = page.getByRole('textbox', { name: '消息内容' });
+  const chatMode = page.getByRole('combobox', { name: '聊天模式' });
+  const newChat = page.getByRole('button', { name: '新建会话', exact: true });
   const send = async (text) => {
     await input.fill(text);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
   };
+  const respondToDiscard = async (action, decision = 'accept') => {
+    const respond = page.waitForEvent('dialog').then(async (dialog) => {
+      const type = dialog.type();
+      const message = dialog.message();
+      if (decision === 'dismiss') await dialog.dismiss();
+      else await dialog.accept();
+      assert.equal(type, 'confirm');
+      assert.match(message, /未保存的内容/);
+    });
+    await Promise.all([respond, action()]);
+  };
   await send('帮我制定学习计划');
   await page.getByText('【本地模拟 · 固定示例】', { exact: true }).waitFor();
   assert.equal(calls.length, 0);
-  await page.getByRole('button', { name: '新建会话' }).click();
-  await page.getByRole('combobox', { name: '聊天模式' }).selectOption('live');
+  await respondToDiscard(() => newChat.click(), 'dismiss');
+  await page.getByText('【本地模拟 · 固定示例】', { exact: true }).waitFor();
+  await respondToDiscard(() => newChat.click());
+  await input.fill('还没有发送的草稿');
+  await respondToDiscard(() => chatMode.selectOption('live'), 'dismiss');
+  assert.equal(await chatMode.inputValue(), 'demo');
+  assert.equal(await input.inputValue(), '还没有发送的草稿');
+  await respondToDiscard(() => chatMode.selectOption('live'));
+  assert.equal(await input.inputValue(), '');
+  console.log('PASS new chat and mode changes protect unsaved content');
   await page.getByRole('textbox', { name: 'Chat access token' }).fill(token);
   await page.getByText('真实服务已配置。', { exact: false }).waitFor();
   await send('incremental');
@@ -203,7 +224,7 @@ try {
   await page.getByText('AI · 正在回复', { exact: true }).waitFor();
   await page.getByText('第一段', { exact: true }).last().waitFor();
   const old = held;
-  await page.getByRole('button', { name: '新建会话' }).click();
+  await respondToDiscard(() => newChat.click());
   mode = 'complete';
   await send('new-session');
   await page.getByText('完整新回复', { exact: true }).waitFor();
@@ -215,7 +236,7 @@ try {
   assert.doesNotMatch(await page.locator('main').innerText(), /第一段|old-session|未完成/);
   console.log('PASS clear during stream and immediate fresh session');
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('combobox', { name: '聊天模式' }).selectOption('demo');
+  await respondToDiscard(() => chatMode.selectOption('demo'));
   await send('代码测试');
   await page.getByText('【本地模拟 · 固定示例】', { exact: true }).waitFor();
   assert.equal(
@@ -265,27 +286,41 @@ try {
   await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
   await page.getByRole('button',{name:'更新保存',exact:true}).click();
   await page.getByText('这条会话已在其他页面更新，请重新打开后再保存。',{exact:true}).waitFor();
+  await input.fill('保留尚未发送的草稿');
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
-  await page.locator('.history-open').filter({hasText:'代码测试'}).click();
+  const originalHistory = page.locator('.history-open').filter({hasText:'代码测试'});
+  await respondToDiscard(() => originalHistory.click(), 'dismiss');
+  assert.equal(await input.inputValue(), '保留尚未发送的草稿');
+  await page.getByText('旧标签页的未保存修改',{exact:true}).waitFor();
+  await respondToDiscard(() => originalHistory.click());
   await page.getByText('来自第二个标签页',{exact:true}).waitFor();
+  assert.equal(await input.inputValue(), '');
   assert.doesNotMatch(await page.locator('main').innerText(),/旧标签页的未保存修改/);
+  console.log('PASS history restore keeps changes and draft until discard is confirmed');
   await second.getByRole('button',{name:'会话历史',exact:true}).click();
   await second.locator('.history-open').filter({hasText:'代码测试'}).waitFor();
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
-  await page.getByRole('button',{name:'删除会话：代码测试',exact:true}).click();
+  const deleteOriginal = page.getByRole('button',{name:'删除会话：代码测试',exact:true});
+  await input.fill('删除前的草稿');
+  await respondToDiscard(() => deleteOriginal.click(), 'dismiss');
+  await originalHistory.waitFor();
+  await page.getByText('来自第二个标签页',{exact:true}).waitFor();
+  assert.equal(await input.inputValue(), '删除前的草稿');
+  await respondToDiscard(() => deleteOriginal.click());
   await page.getByText('尚未保存会话；聊天后点击“保存会话”。',{exact:true}).waitFor();
   await second.getByText('尚未保存会话；聊天后点击“保存会话”。',{exact:true}).waitFor();
+  assert.equal(await input.inputValue(), '');
   await second.close();
   console.log('PASS cross-tab revision conflict, reactive history and atomic deletion');
 
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
   await send('保存与新建隔离');
   await page.waitForFunction(()=>!document.querySelector('textarea').disabled);
-  await page.evaluate(()=>{
+  await respondToDiscard(() => page.evaluate(()=>{
     const buttons=Array.from(document.querySelectorAll('button'));
     buttons.find(button=>button.textContent.trim()==='保存会话').click();
     buttons.find(button=>button.textContent.trim()==='新建会话').click();
-  });
+  }));
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
   await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'更新保存',exact:true}).count(),0);
@@ -305,8 +340,10 @@ try {
     return bounds.top>=0 && bounds.bottom<=window.innerHeight;
   }),true,'history drawer must leave the composer within the mobile viewport');
   await page.screenshot({path:`${screenshots}/history-mobile.png`,animations:'disabled'});
-  await page.getByRole('button',{name:'会话历史',exact:true}).click();
-  console.log('PASS save/new-session race isolation and title search');
+  const savedHistory = page.locator('.history-open').filter({hasText:'保存与新建隔离'});
+  await savedHistory.click();
+  await page.locator('main').getByText('保存与新建隔离',{exact:true}).waitFor();
+  console.log('PASS save/new-session race isolation, title search and switching without pending edits');
 
   await page.setViewportSize({width:1280,height:900});
   await page.getByRole('button',{name:'新建会话',exact:true}).click();
@@ -317,7 +354,9 @@ try {
   await page.getByText('AI · 正在回复',{exact:true}).waitFor();
   const switching=held;
   await page.getByRole('button',{name:'会话历史',exact:true}).click();
-  await page.locator('.history-open').filter({hasText:'保存与新建隔离'}).click();
+  await respondToDiscard(() => savedHistory.click(), 'dismiss');
+  await page.getByText('AI · 正在回复',{exact:true}).waitFor();
+  await respondToDiscard(() => savedHistory.click());
   await page.getByText('保存与新建隔离',{exact:true}).waitFor();
   await within(switching.closed);
   assert.equal(await page.getByRole('combobox',{name:'聊天模式'}).inputValue(),'demo');
@@ -341,7 +380,7 @@ try {
   assert.deepEqual(normalizedMessages(calls.at(-1).messages).map(message=>message.content),['保存真实会话','完整新回复','恢复后继续']);
   console.log('PASS restored live conversation forwards only successful saved turns');
 
-  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  await respondToDiscard(() => newChat.click());
   mode='markdown';
   const tracking=[];
   page.on('request',request=>{if(request.url().includes('tracker.invalid'))tracking.push(request.url());});
@@ -370,7 +409,7 @@ try {
   await page.screenshot({path:`${screenshots}/markdown-mobile.png`,animations:'disabled'});
   console.log('PASS streamed Markdown tables, highlighted code copy, safe links and blocked tracking images');
 
-  await page.getByRole('button',{name:'新建会话',exact:true}).click();
+  await respondToDiscard(() => newChat.click());
   mode='split-unicode';
   const unicodePrompt='中'.repeat(79)+'🙂';
   await send(unicodePrompt);

@@ -9,6 +9,7 @@ import type { ConversationSummary, SavedConversation } from '../../lib/local/con
 interface HistoryOptions {
   mode: ChatMode;
   messages: DisplayMessage[];
+  draft: string;
   restore: (conversation: SavedConversation) => void;
   clear: () => void;
 }
@@ -18,10 +19,10 @@ function storageIsUnavailable() {
   try { return !window.indexedDB; } catch { return true; }
 }
 
-export function useConversationHistory({ mode, messages, restore, clear }: HistoryOptions) {
+export function useConversationHistory({ mode, messages, draft, restore, clear }: HistoryOptions) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<{ id: string; revision: number } | null>(null);
+  const [selected, setSelected] = useState<SavedConversation | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -38,6 +39,24 @@ export function useConversationHistory({ mode, messages, restore, clear }: Histo
 
   useEffect(() => { setNotice(''); setError(''); }, [messages]);
   useEffect(() => () => { epoch.current += 1; }, []);
+
+  function hasUnsavedMessages() {
+    if (!messages.length) return false;
+    if (!selected || selected.mode !== mode || selected.messages.length !== messages.length) return true;
+
+    // The reducer's numeric `request` stays in memory. Compare the persisted fields.
+    return selected.messages.some((saved, index) => {
+      const current = messages[index];
+      return !current || current.role !== saved.role || current.content !== saved.content ||
+        current.status !== saved.status || current.retryText !== saved.retryText ||
+        current.requestId !== saved.requestId;
+    });
+  }
+
+  function confirmDiscard() {
+    return (!draft && !hasUnsavedMessages()) ||
+      window.confirm('当前会话有未保存的内容。继续将丢弃这些内容。');
+  }
 
   function resetSelection() {
     epoch.current += 1;
@@ -65,24 +84,26 @@ export function useConversationHistory({ mode, messages, restore, clear }: Histo
         ...(selected ? { id: selected.id, expectedRevision: selected.revision } : {}),
       });
       if (operation !== epoch.current) return;
-      setSelected({ id: saved.id, revision: saved.revision });
+      setSelected(saved);
       setNotice('已保存到本浏览器；刷新后可从“会话历史”打开。');
     } catch (failure) { report(operation, failure); }
     finally { finish(operation); }
   }
   async function load(id: string) {
+    if (!confirmDiscard()) return;
     const operation = begin();
     if (operation === undefined) return;
     try {
       const saved = await getConversationRepository().load(id);
       if (operation !== epoch.current) return;
       restore(saved);
-      setSelected({ id: saved.id, revision: saved.revision });
+      setSelected(saved);
       setOpen(false);
     } catch (failure) { report(operation, failure); }
     finally { finish(operation); }
   }
   async function remove(row: ConversationSummary) {
+    if (selected?.id === row.id && !confirmDiscard()) return;
     const operation = begin();
     if (operation === undefined) return;
     try {
@@ -108,5 +129,6 @@ export function useConversationHistory({ mode, messages, restore, clear }: Histo
   }
   return { open, setOpen, search, setSearch, selected, busy, notice, error,
     items: result?.items ?? [], reading: result === undefined && !storageUnavailable,
-    unavailable: storageUnavailable || (result?.unavailable ?? false), save, load, remove, download, resetSelection };
+    unavailable: storageUnavailable || (result?.unavailable ?? false), save, load, remove, download,
+    confirmDiscard, resetSelection };
 }
