@@ -23,11 +23,16 @@ export default function ChatApp() {
     accessToken,
     ready: service === 'ready',
   });
-  const history = useConversationHistory({ mode, messages,
+  const history = useConversationHistory({ mode, messages, draft: input,
     restore: (saved) => { restoreConversation(saved.messages); setMode(saved.mode); },
     clear: clearChat,
   });
-  function newConversation() { history.resetSelection(); clearChat(); }
+  function newConversation(nextMode: ChatMode = mode) {
+    if (!history.confirmDiscard()) return;
+    history.resetSelection();
+    clearChat();
+    setMode(nextMode);
+  }
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -84,10 +89,7 @@ export default function ChatApp() {
           <select
             aria-label="聊天模式"
             value={mode}
-            onChange={(event) => {
-              newConversation();
-              setMode(event.target.value === 'live' ? 'live' : 'demo');
-            }}
+            onChange={(event) => newConversation(event.target.value === 'live' ? 'live' : 'demo')}
           >
             <option value="demo">本地模拟</option>
             <option value="live">真实服务</option>
@@ -105,7 +107,7 @@ export default function ChatApp() {
             />
           )}
           {messages.length > 0 && (
-            <button className="clear-btn" onClick={newConversation}>
+            <button className="clear-btn" onClick={() => newConversation()}>
               新建会话
             </button>
           )}
@@ -145,7 +147,7 @@ export default function ChatApp() {
             <div className="logo">&#10022;</div>
             <p>{mode === 'demo' ? '无需密钥，先体验聊天流程' : '连接你的私人模型服务'}</p>
             {mode === 'demo' ? (
-              <button className="clear-btn" onClick={() => setInput('帮我制定学习计划')}>
+              <button className="clear-btn" disabled={history.busy} onClick={() => setInput('帮我制定学习计划')}>
                 试试：帮我制定学习计划
               </button>
             ) : (
