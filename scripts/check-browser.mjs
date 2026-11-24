@@ -50,7 +50,7 @@ const upstream = createServer(async (req, res) => {
   const text = (value) =>
     event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: value } });
   const current = mode;
-  if (current === 'held' || current === 'markdown') {
+  if (current === 'held' || current === 'markdown' || current === 'scroll') {
     let release;
     const gate = new Promise((resolve) => (release = resolve));
     let close;
@@ -60,10 +60,14 @@ const upstream = createServer(async (req, res) => {
       release();
       close();
     });
-    text(current === 'markdown' ? '## 可运行示例\n\n| 能力 | 状态 |\n| --- | --- |\n| 流式渲染 | 运行中 |\n\n```typescript\nconst answer = ' : '第一段');
+    if (current === 'scroll') {
+      text(Array.from({ length: 36 }, (_, index) => `阅读位置验证 ${index + 1}\n\n`).join(''));
+    } else {
+      text(current === 'markdown' ? '## 可运行示例\n\n| 能力 | 状态 |\n| --- | --- |\n| 流式渲染 | 运行中 |\n\n```typescript\nconst answer = ' : '第一段');
+    }
     await gate;
     if (res.destroyed) return;
-    text(current === 'markdown'
+    text(current === 'scroll' ? '阅读位置验证结束' : current === 'markdown'
       ? '42;\n```\n\n[官方文档](https://example.com/docs)\n\n![外部图片](https://tracker.invalid/pixel)\n\n<script>window.__unsafeMarkdown = true</script>\n\n<a href="javascript:window.__unsafeMarkdown=true">危险链接</a>'
       : '第二段🙂');
   } else if (current === 'error') {
@@ -160,7 +164,7 @@ try {
   const newChat = page.getByRole('button', { name: '新建会话', exact: true });
   const send = async (text) => {
     await input.fill(text);
-    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await page.getByRole('button', { name: '发送消息', exact: true }).click();
   };
   const respondToDiscard = async (action, decision = 'accept') => {
     const respond = page.waitForEvent('dialog').then(async (dialog) => {
@@ -195,7 +199,7 @@ try {
   await page.screenshot({ path: `${screenshots}/stream-desktop.png`, animations: 'disabled' });
   held.release();
   await page.getByText('第一段第二段🙂', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Send message', exact: true }).waitFor();
+  await page.getByRole('button', { name: '发送消息', exact: true }).waitFor();
   console.log('PASS desktop incremental response before completion');
   await send('cancel-check');
   await page.getByText('第一段', { exact: true }).waitFor();
@@ -256,7 +260,7 @@ try {
   await page.locator('.history-open').filter({hasText:'代码测试'}).click();
   await page.getByText('【本地模拟 · 固定示例】',{exact:true}).waitFor();
   await send('继续记录');
-  await page.getByRole('button',{name:'Send message',exact:true}).waitFor();
+  await page.getByRole('button',{name:'发送消息',exact:true}).waitFor();
   await page.getByRole('button',{name:'更新保存',exact:true}).click();
   await page.getByText('已保存到本浏览器；刷新后可从“会话历史”打开。',{exact:true}).waitFor();
   const downloadEvent = page.waitForEvent('download');
@@ -276,7 +280,7 @@ try {
   await second.getByRole('button',{name:'会话历史',exact:true}).click();
   await second.locator('.history-open').filter({hasText:'代码测试'}).click();
   await second.getByRole('textbox',{name:'消息内容'}).fill('来自第二个标签页');
-  await second.getByRole('button',{name:'Send message',exact:true}).click();
+  await second.getByRole('button',{name:'发送消息',exact:true}).click();
   await second.getByRole('button',{name:'更新保存',exact:true}).waitFor();
   await second.getByRole('button',{name:'更新保存',exact:true}).waitFor({state:'visible'});
   await second.waitForFunction(()=>!document.querySelector('textarea').disabled);
@@ -431,7 +435,7 @@ try {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(element,'bad'+String.fromCharCode(0xd83d));
     element.dispatchEvent(new Event('input',{bubbles:true}));
   });
-  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await page.getByRole('button',{name:'发送消息',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'输入包含不完整的字符，请重新输入。'}).waitFor();
   assert.equal(calls.length,beforeInvalid);
   assert.equal(await page.locator('.message.user').count(),0);
@@ -441,12 +445,31 @@ try {
   assert.equal(await page.getByRole('alert').filter({hasText:'输入包含不完整的字符，请重新输入。'}).count(),0);
   console.log('PASS invalid input remains editable without a model call and recovers after correction');
 
+  await respondToDiscard(() => newChat.click());
+  mode = 'scroll';
+  await send('验证流式输出时的阅读位置');
+  await page.getByText('阅读位置验证 36', { exact: true }).waitFor({ state: 'attached' });
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector('.chat-container');
+    return viewport.scrollTop > 200 && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 2;
+  });
+  const viewport = page.locator('.chat-container');
+  await viewport.evaluate((element) => new Promise((resolve) => {
+    element.addEventListener('scroll', resolve, { once: true });
+    element.scrollTop = 0;
+  }));
+  held.release();
+  await page.getByText('阅读位置验证结束', { exact: true }).waitFor({ state: 'attached' });
+  await page.waitForFunction(() => !document.querySelector('textarea').disabled);
+  assert.ok(await viewport.evaluate((element) => element.scrollTop <= 2));
+  console.log('PASS new stream text does not pull the reader away from earlier content');
+
   const unavailable=await page.context().newPage();
   unavailable.on('pageerror', (error) => errors.push(error.message));
   await unavailable.addInitScript(()=>Object.defineProperty(window,'indexedDB',{value:undefined}));
   await unavailable.goto(origin);
   await unavailable.getByRole('textbox',{name:'消息内容'}).fill('无存储仍可聊天');
-  await unavailable.getByRole('button',{name:'Send message',exact:true}).click();
+  await unavailable.getByRole('button',{name:'发送消息',exact:true}).click();
   await unavailable.getByText('【本地模拟 · 固定示例】',{exact:true}).waitFor();
   await unavailable.getByRole('button',{name:'保存会话',exact:true}).click();
   await unavailable.getByText('浏览器未开放本机保存，当前聊天仍可继续。',{exact:true}).waitFor();
