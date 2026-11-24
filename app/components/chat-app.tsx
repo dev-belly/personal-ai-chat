@@ -18,27 +18,34 @@ export default function ChatApp() {
   );
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [storageWarning, setStorageWarning] = useState(false);
+  const viewportRef = useRef<HTMLElement>(null);
+  const followLatest = useRef(true);
   const { messages, loading, input, inputError, setInput, sendMessage, clearChat, restoreConversation, cancelRequest } = useChat({
     mode,
     accessToken,
     ready: service === 'ready',
   });
   const history = useConversationHistory({ mode, messages, draft: input,
-    restore: (saved) => { restoreConversation(saved.messages); setMode(saved.mode); },
+    restore: (saved) => {
+      followLatest.current = true;
+      restoreConversation(saved.messages);
+      setMode(saved.mode);
+    },
     clear: clearChat,
   });
   function newConversation(nextMode: ChatMode = mode) {
     if (!history.confirmDiscard()) return;
+    followLatest.current = true;
     history.resetSelection();
     clearChat();
     setMode(nextMode);
   }
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const viewport = viewportRef.current;
+    if (viewport && followLatest.current) viewport.scrollTop = viewport.scrollHeight;
+  }, [messages, loading]);
   useEffect(() => {
     try {
       setAccessToken(sessionStorage.getItem('chat-access-token') || '');
@@ -80,6 +87,11 @@ export default function ChatApp() {
   }
 
   const canSend = mode === 'demo' || (service === 'ready' && Boolean(accessToken.trim()));
+  function submitMessage(retry?: string) {
+    followLatest.current = true;
+    sendMessage(retry);
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -141,7 +153,12 @@ export default function ChatApp() {
       {(history.notice || history.error || history.busy) && <div className="history-status" role="status">
         {history.busy ? '正在处理会话…' : history.error || history.notice}
       </div>}
-      <main className="chat-container" aria-live="polite" aria-busy={loading}>
+      <main className="chat-container" ref={viewportRef} aria-live="polite" aria-busy={loading}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          followLatest.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 72;
+        }}
+      >
         {messages.length === 0 ? (
           <div className="empty-state">
             <div className="logo">&#10022;</div>
@@ -180,7 +197,7 @@ export default function ChatApp() {
                   <button
                     className="clear-btn retry-btn"
                     disabled={loading || history.busy || !canSend}
-                    onClick={() => sendMessage(message.retryText)}
+                    onClick={() => submitMessage(message.retryText)}
                   >
                     重试这条消息
                   </button>
@@ -199,7 +216,6 @@ export default function ChatApp() {
                 </div>
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
         )}
       </main>
@@ -214,7 +230,7 @@ export default function ChatApp() {
             onKeyDown={(event) => {
               if (!history.busy && shouldSubmit(event)) {
                 event.preventDefault();
-                sendMessage();
+                submitMessage();
               }
             }}
             placeholder="输入消息… Enter 发送，Shift+Enter 换行"
@@ -229,11 +245,11 @@ export default function ChatApp() {
           ) : (
             <button
               className="send-btn"
-              onClick={() => sendMessage()}
+              onClick={() => submitMessage()}
               disabled={!input.trim() || history.busy || !canSend}
-              aria-label="Send message"
+              aria-label="发送消息"
             >
-              ↑
+              发送
             </button>
           )}
         </div>
